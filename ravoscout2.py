@@ -8,19 +8,13 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import streamlit as st
 
-st.set_page_config(page_title="Karty – Slavia standard (váhy + běžecká data)", layout="wide")
-st.title("⚽ Generátor datových karet (váhový model + vyhledávání hráčů + běžecká data)")
+st.set_page_config(page_title="Karty – Slavia standard (váhy + běh)", layout="wide")
 
-# =============================================================================
-# CACHE – načítání Excelu
-# =============================================================================
-@st.cache_data
-def load_xlsx(file_bytes: bytes) -> pd.DataFrame:
-    return pd.read_excel(BytesIO(file_bytes))
+st.title("⚽ Generátor datových karet (herní + běžecká data)")
 
-# =============================================================================
+# =====================================================================
 # BARVY
-# =============================================================================
+# =====================================================================
 def color_for(val):
     if pd.isna(val): return "lightgrey"
     if val <= 25: return "#FF4C4C"   # červená
@@ -28,9 +22,9 @@ def color_for(val):
     if val <= 75: return "#FFD700"   # žlutá
     return "#228B22"                 # zelená
 
-# =============================================================================
-# HERNÍ BLOKY A METRIKY
-# =============================================================================
+# =====================================================================
+# BLOKY A METRIKY (HERNI DATA)
+# =====================================================================
 DEF = [
     ("Defensive duels per 90","Defenzivní duely /90"),
     ("Defensive duels won, %","Úspěšnost obr. duelů %"),
@@ -67,9 +61,23 @@ blocks = [("Defenziva", DEF, "Defenziva"),
           ("Přihrávky", PAS, "Přihrávky"),
           ("1v1", ONE, "1v1")]
 
-# =============================================================================
-# HERNÍ ALIASY
-# =============================================================================
+# =====================================================================
+# BLOK – BĚH
+# =====================================================================
+RUN = [
+    ("Total distance per 90", "Total distance /90"),
+    ("High-intensity runs per 90", "HI runs /90"),
+    ("Sprints per 90", "Sprints /90"),
+    ("Max speed (km/h)", "Max speed km/h"),
+    ("Average speed (km/h)", "Avg speed km/h"),
+    ("Accelerations per 90", "Accelerations /90"),
+    ("Decelerations per 90", "Decelerations /90"),
+    ("High-speed distance per 90", "HS distance /90"),
+]
+
+# =====================================================================
+# ALIASY
+# =====================================================================
 ALIASES = {
     "Cross accuracy, %": ["Accurate crosses, %","Cross accuracy, %"],
     "Progressive passes per 90": ["Progressive passes per 90","Progressive passes/90"],
@@ -78,53 +86,74 @@ ALIASES = {
     "Progressive runs per 90": ["Progressive runs per 90","Progressive runs/90"],
     "Second assists per 90": ["Second assists per 90","Second assists/90"],
 }
-def get_value_with_alias(row, key):
-    if key in row.index:
-        return row[key]
-    for cand in ALIASES.get(key, []):
-        if cand in row.index:
-            return row[cand]
-    if key == "Cross accuracy, %" and "Accurate crosses, %" in row.index:
-        return row["Accurate crosses, %"]
-    return np.nan
 
-# =============================================================================
-# BĚŽECKÉ METRIKY + ALIASY
-# =============================================================================
-RUN = [
-    ("Total distance per 90", "Total distance /90"),
-    ("High-intensity runs per 90", "High-intensity runs /90"),
-    ("Sprints per 90", "Sprints /90"),
-    ("Max speed (km/h)", "Max speed (km/h)"),
-    ("Average speed (km/h)", "Average speed (km/h)"),
-    ("Accelerations per 90", "Accelerations /90"),
-    ("Decelerations per 90", "Decelerations /90"),
-    ("High-speed distance per 90", "High-speed distance /90"),
-]
-RUN_KEY = "Běh"
-
-ALIASES_RUN.update({
+ALIASES_RUN = {
     "Total distance per 90": ["Distance P90","Total distance per 90","Total distance/90"],
     "High-intensity runs per 90": ["HI Count P90","High intensity runs/90","HIR/90"],
     "Sprints per 90": ["Sprint Count P90","Sprints/90","Number of sprints per 90"],
-    "Max speed (km/h)": ["PSV-99","Top speed","Max velocity","Max speed","PSV 99"],
+    "Max speed (km/h)": ["PSV-99","PSV 99","Top speed","Max velocity","Max speed"],
     "Average speed (km/h)": ["M/min P90","Average speed (km/h)","Avg speed","Average velocity"],
-    "Accelerations per 90": ["High Acceleration Count P90","Medium Acceleration Count P90","Accelerations/90"],
-    "Decelerations per 90": ["High Deceleration Count P90","Medium Deceleration Count P90","Decelerations/90"],
+    "Accelerations per 90": ["High Acceleration Count P90","Medium Acceleration Count P90"],
+    "Decelerations per 90": ["High Deceleration Count P90","Medium Deceleration Count P90"],
     "High-speed distance per 90": ["HSR Distance P90","High speed distance per 90","HS distance/90"],
-})
+}
 
-def value_with_alias_run(row, key):
+# =====================================================================
+# HELPERY
+# =====================================================================
+def get_value_with_alias(row, key, aliases):
     if key in row.index: return row[key]
-    for cand in ALIASES_RUN.get(key, []):
+    for cand in aliases.get(key, []):
         if cand in row.index: return row[cand]
     return np.nan
-def series_for_alias_run(df: pd.DataFrame, eng_key: str):
-    if df is None or df.empty: return None
-    if eng_key in df.columns: return df[eng_key]
-    for cand in ALIASES_RUN.get(eng_key, []):
-        if cand in df.columns: return df[cand]
-    return None
+
+def normalize_metric(agg: pd.DataFrame, eng_key: str, value, aliases):
+    col = None
+    if eng_key in agg.columns: col = eng_key
+    else:
+        for cand in aliases.get(eng_key, []):
+            if cand in agg.columns:
+                col = cand; break
+    if col is None or pd.isna(value): return np.nan
+    s = pd.to_numeric(agg[col], errors="coerce").dropna()
+    v = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if s.empty or pd.isna(v): return np.nan
+    mn, mx = s.min(), s.max()
+    if mx == mn: return 50.0
+    return float(np.clip((v-mn)/(mx-mn)*100, 0, 100))
+
+def compute_run_scores(row, cz_df):
+    out = {}
+    for eng, label in RUN:
+        if eng == "Average speed (km/h)":
+            val = np.nan
+            for cand in ALIASES_RUN[eng]:
+                if cand in row.index:
+                    val = row[cand]
+                    if "M/min" in cand: val = val*0.06
+            if pd.isna(val): out[label] = (np.nan,np.nan)
+            else:
+                pct = normalize_metric(cz_df, eng, val, ALIASES_RUN)
+                out[label] = (val,pct)
+        elif eng == "Accelerations per 90":
+            hi = row.get("High Acceleration Count P90", np.nan)
+            med = row.get("Medium Acceleration Count P90", np.nan)
+            val = np.nansum([hi,med])
+            pct = normalize_metric(cz_df, eng, val, ALIASES_RUN)
+            out[label] = (val,pct)
+        elif eng == "Decelerations per 90":
+            hi = row.get("High Deceleration Count P90", np.nan)
+            med = row.get("Medium Deceleration Count P90", np.nan)
+            val = np.nansum([hi,med])
+            pct = normalize_metric(cz_df, eng, val, ALIASES_RUN)
+            out[label] = (val,pct)
+        else:
+            val = get_value_with_alias(row, eng, ALIASES_RUN)
+            pct = normalize_metric(cz_df, eng, val, ALIASES_RUN)
+            out[label] = (val,pct)
+    vals = [pct for (val,pct) in out.values() if not pd.isna(pct)]
+    run_index = float(np.mean(vals)) if vals else np.nan
+    return out, run_index
 
 # =============================================================================
 # HELPERY PRO BĚH – POZICE/JMÉNO + LONG->WIDE
