@@ -8,7 +8,13 @@ import streamlit as st
 
 from config import blocks, RUN, RUN_KEY, POS_REGEX, resolve_pos_group
 from data_io import load_xlsx, auto_fix_run_df, get_pos_col, get_player_col, find_run_row_by_player
-from models import compute_overall_for_row, avg_peer_index, run_index_for_row
+from models import (
+    compute_overall_for_row,
+    avg_peer_index,
+    run_index_for_row,
+    series_for_alias_run,      # <— NOVĚ import
+    value_with_alias_run       # <— NOVĚ import
+)
 from render_card import render_card_visual
 
 # ============== UI meta ============
@@ -80,9 +86,8 @@ with tab_card:
                 plc = get_player_col(cz_run_pos) or "Player"
                 cz_tmp = cz_run_pos.rename(columns={plc:"Player"}) if plc!="Player" and plc in cz_run_pos.columns else cz_run_pos
                 cz_agg_tmp = cz_tmp.groupby("Player").mean(numeric_only=True)
-            miss_cz = [lab for eng,lab in RUN if models.series_for_alias_run(cz_agg_tmp, eng) is None]  # optional
+            miss_cz = [lab for eng,lab in RUN if series_for_alias_run(cz_agg_tmp, eng) is None]
             tmp_row = row_run if ('row_run' in locals() and row_run is not None) else pd.Series(dtype=object)
-            from models import value_with_alias_run
             miss_pl = [lab for eng,lab in RUN if pd.isna(value_with_alias_run(tmp_row, eng))]
             st.write(f"Chybějící metriky v CZ benchmarku: {', '.join(miss_cz) if miss_cz else '—'}")
             st.write(f"Chybějící metriky u hráče: {', '.join(miss_pl) if miss_pl else '—'}")
@@ -200,7 +205,7 @@ with tab_search:
                         "Index Off": sec_idx.get("Ofenziva", np.nan),
                         "Index Pass": sec_idx.get("Přihrávky", np.nan),
                         "Index 1v1": sec_idx.get("1v1", np.nan),
-                        "Role-index (vážený)": (overall if np.isnan(run_idx) or w_run<=0 else (1.0 - w_run)*overall + 0*w_run),  # jen pro kompatibilitu
+                        "Role-index (vážený)": overall,   # herní
                         "Run index": run_idx,
                         "Final index": final_index if (not np.isnan(run_idx) and w_run>0.0) else np.nan,
                         "Verdikt": verdict
@@ -301,3 +306,4 @@ with tab_search:
                     final_index=final_index, w_run=w_run
                 )
                 st.pyplot(fig)
+
