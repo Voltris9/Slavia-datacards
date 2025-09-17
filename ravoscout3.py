@@ -103,16 +103,17 @@ RUN = [
 ]
 RUN_KEY = "Běh"
 
-ALIASES_RUN = {
-    "Total distance per 90": ["Total distance per 90","Total distance/90","Distance per 90","Total distance (km) per 90"],
-    "High-intensity runs per 90": ["High-intensity runs per 90","High intensity runs per 90","High intensity runs/90","HIR/90"],
-    "Sprints per 90": ["Sprints per 90","Sprints/90","Number of sprints per 90"],
-    "Max speed (km/h)": ["Max speed (km/h)","Top speed","Max velocity","Max speed"],
-    "Average speed (km/h)": ["Average speed (km/h)","Avg speed","Average velocity"],
-    "Accelerations per 90": ["Accelerations per 90","Accelerations/90","Accels per 90"],
-    "Decelerations per 90": ["Decelerations per 90","Decelerations/90","Decels per 90"],
-    "High-speed distance per 90": ["High-speed distance per 90","HS distance/90","High speed distance per 90"],
-}
+ALIASES_RUN.update({
+    "Total distance per 90": ["Distance P90","Total distance per 90","Total distance/90"],
+    "High-intensity runs per 90": ["HI Count P90","High intensity runs/90","HIR/90"],
+    "Sprints per 90": ["Sprint Count P90","Sprints/90","Number of sprints per 90"],
+    "Max speed (km/h)": ["PSV-99","Top speed","Max velocity","Max speed","PSV 99"],
+    "Average speed (km/h)": ["M/min P90","Average speed (km/h)","Avg speed","Average velocity"],
+    "Accelerations per 90": ["High Acceleration Count P90","Medium Acceleration Count P90","Accelerations/90"],
+    "Decelerations per 90": ["High Deceleration Count P90","Medium Deceleration Count P90","Decelerations/90"],
+    "High-speed distance per 90": ["HSR Distance P90","High speed distance per 90","HS distance/90"],
+})
+
 def value_with_alias_run(row, key):
     if key in row.index: return row[key]
     for cand in ALIASES_RUN.get(key, []):
