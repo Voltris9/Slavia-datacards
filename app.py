@@ -1,5 +1,4 @@
-# app.py  —  Slavia datacards (herní + vyhledávání + běžecká karta)
-# ---------------------------------------------------------------
+# app.py — Slavia datacards (herní + vyhledávání + běžecká karta)
 import io, zipfile, unicodedata, re
 from io import BytesIO
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
@@ -13,11 +12,11 @@ st.title("⚽ Generátor datových karet (váhový model + vyhledávání + bě�
 @st.cache_data
 def load_xlsx(b: bytes) -> pd.DataFrame: return pd.read_excel(BytesIO(b))
 
-def color_for(v):
+def color_for(v): 
     if pd.isna(v): return "lightgrey"
     return "#FF4C4C" if v<=25 else "#FF8C00" if v<=50 else "#FFD700" if v<=75 else "#228B22"
 
-def _best_col(df, names):
+def _best_col(df, names): 
     for n in names:
         if n in df.columns: return n
     return None
@@ -28,18 +27,19 @@ def get_player_col(df):return next((c for c in ["Player","Name","player","name",
 def ensure_run_wide(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty: return df
     if "Metric" in df.columns and "Value" in df.columns:
-        idx = [c for c in [get_player_col(df) or "Player","Team",get_pos_col(df),"Age"] if c and c in df.columns]
-        wide = df.pivot_table(index=idx, columns="Metric", values="Value", aggfunc="mean").reset_index()
-        if get_player_col(df)!="Player" and get_player_col(df) in wide.columns: wide = wide.rename(columns={get_player_col(df):"Player"})
-        if get_pos_col(df) and get_pos_col(df)!="Position" and get_pos_col(df) in wide.columns: wide = wide.rename(columns={get_pos_col(df):"Position"})
+        idx=[c for c in [get_player_col(df) or "Player","Team",get_pos_col(df),"Age"] if c and c in df.columns]
+        wide=df.pivot_table(index=idx, columns="Metric", values="Value", aggfunc="mean").reset_index()
+        pc=get_player_col(df); if pc and pc!="Player" and pc in wide.columns: wide=wide.rename(columns={pc:"Player"})
+        sc=get_pos_col(df);   if sc and sc!="Position" and sc in wide.columns: wide=wide.rename(columns={sc:"Position"})
         return wide
-    if get_pos_col(df) and get_pos_col(df)!="Position": df=df.rename(columns={get_pos_col(df):"Position"})
-    if get_player_col(df) and get_player_col(df)!="Player": df=df.rename(columns={get_player_col(df):"Player"})
+    pc=get_player_col(df); sc=get_pos_col(df)
+    if pc and pc!="Player": df=df.rename(columns={pc:"Player"})
+    if sc and sc!="Position": df=df.rename(columns={sc:"Position"})
     return df
 
 def _normtxt(s:str)->str:
-    s = unicodedata.normalize("NFKD", str(s))
-    s = "".join(c for c in s if not unicodedata.combining(c))
+    s=unicodedata.normalize("NFKD", str(s))
+    s="".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+"," ",s).strip().lower()
 
 # ---------- Herní bloky ----------
@@ -65,14 +65,14 @@ ALIASES={"Cross accuracy, %":["Accurate crosses, %","Cross accuracy, %"],
 
 def get_val_alias(row,key):
     if key in row.index: return row[key]
-    for c in ALIASES.get(key,[]): 
+    for c in ALIASES.get(key,[]):
         if c in row.index: return row[c]
     if key=="Cross accuracy, %" and "Accurate crosses, %" in row.index: return row["Accurate crosses, %"]
     return np.nan
 
 def series_alias(df,key):
     if key in df.columns: return df[key]
-    for c in ALIASES.get(key,[]): 
+    for c in ALIASES.get(key,[]):
         if c in df.columns: return df[c]
     if key=="Cross accuracy, %" and "Accurate crosses, %" in df.columns: return df["Accurate crosses, %"]
     return None
@@ -91,8 +91,8 @@ def section_scores(row,agg,metric_weights=None):
         vals={label:norm_metric(agg,eng,get_val_alias(row,eng)) for eng,label in lst}
         sec_scores[key]=vals
         if metric_weights and metric_weights.get(key):
-            wsum=sum(metric_weights[key].values())
-            sec_idx[key]=float(sum(v*metric_weights[key].get(lbl,0) for lbl,v in vals.items() if not pd.isna(v))/wsum) if wsum>0 else np.nan
+            w=metric_weights[key]; wsum=sum(w.values())
+            sec_idx[key]=float(sum(v*w.get(lbl,0) for lbl,v in vals.items() if not pd.isna(v))/wsum) if wsum>0 else np.nan
         else:
             arr=[v for v in vals.values() if not pd.isna(v)]
             sec_idx[key]=float(np.mean(arr)) if arr else np.nan
@@ -102,8 +102,7 @@ def role_index(sec_idx,weights):
     acc=tot=0.0
     for k in ["Defenziva","Ofenziva","Přihrávky","1v1"]:
         v=sec_idx.get(k,np.nan)
-        if not pd.isna(v): 
-            w=weights.get(k,0)/100.0; acc+=v*w; tot+=w
+        if not pd.isna(v): w=weights.get(k,0)/100.0; acc+=v*w; tot+=w
     return float(acc/tot) if tot>0 else np.nan
 
 # ---------- Pozice + peers ----------
@@ -178,24 +177,31 @@ def _post_run(df):
     if "Average speed (km/h)" not in df.columns and "M/min P90" in df.columns:
         df["Average speed (km/h)"]=pd.to_numeric(df["M/min P90"],errors="coerce")*0.06
     if "Accelerations per 90" not in df.columns:
-        a=[pd.to_numeric(df[c],errors="coerce") for c in ["High Acceleration Count P90","Medium Acceleration Count P90"] if c in df.columns]
-        if a: s=a[0];  [s:=s.add(x,fill_value=0) for x in a[1:]]; df["Accelerations per 90"]=s
+        acc_cols=[c for c in ["High Acceleration Count P90","Medium Acceleration Count P90"] if c in df.columns]
+        if acc_cols:
+            s=pd.to_numeric(df[acc_cols[0]],errors="coerce")
+            for c in acc_cols[1:]:
+                s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
+            df["Accelerations per 90"]=s
     if "Decelerations per 90" not in df.columns:
-        d=[pd.to_numeric(df[c],errors="coerce") for c in ["High Deceleration Count P90","Medium Deceleration Count P90"] if c in df.columns]
-        if d: s=d[0];  [s:=s.add(x,fill_value=0) for x in d[1:]]; df["Decelerations per 90"]=s
+        dec_cols=[c for c in ["High Deceleration Count P90","Medium Deceleration Count P90"] if c in df.columns]
+        if dec_cols:
+            s=pd.to_numeric(df[dec_cols[0]],errors="coerce")
+            for c in dec_cols[1:]:
+                s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
+            df["Decelerations per 90"]=s
+    for c in ["Player","Team","Position"]:
+        if c in df.columns: df[c]=df[c].astype(str).str.strip()
     return df
 
 def auto_fix_run_df(run_df:pd.DataFrame, game_df:pd.DataFrame)->pd.DataFrame:
     if run_df is None or run_df.empty: return run_df
-    # základní přejmenování ID sloupců
     id_map={}
     if "Player" not in run_df.columns and (c:=_best_col(run_df,["Name","player","name","Short Name"])): id_map[c]="Player"
-    if "Team"   not in run_df.columns and (c:=_best_col(run_df,["Club","team","Team"])):                 id_map[c]="Team"
+    if "Team" not in run_df.columns and (c:=_best_col(run_df,["Club","team","Team"])): id_map[c]="Team"
     if "Position" not in run_df.columns and (c:=_best_col(run_df,["Pos","Role","Primary position","position"])): id_map[c]="Position"
     if id_map: run_df=run_df.rename(columns=id_map)
-    run_df=ensure_run_wide(run_df)
-    run_df=_post_run(run_df)
-    # Position doplníme z herních, když chybí
+    run_df=ensure_run_wide(run_df); run_df=_post_run(run_df)
     if "Position" not in run_df.columns and game_df is not None and not game_df.empty:
         g=game_df.copy()
         if "Player" not in g.columns and (pc:=_best_col(g,["Name","player","name"])): g=g.rename(columns={pc:"Player"})
@@ -203,8 +209,6 @@ def auto_fix_run_df(run_df:pd.DataFrame, game_df:pd.DataFrame)->pd.DataFrame:
             g=g[["Player","Position"]].dropna().groupby("Player",as_index=False).agg({"Position":"first"})
             run_df["_k"]=run_df["Player"].map(_normtxt); g["_k"]=g["Player"].map(_normtxt)
             run_df=run_df.merge(g[["_k","Position"]],on="_k",how="left").drop(columns=["_k"])
-    for c in ["Player","Team","Position"]:
-        if c in run_df.columns: run_df[c]=run_df[c].astype(str).str.strip()
     return run_df
 
 def norm_run_metric(pop,key,val):
@@ -225,10 +229,9 @@ def run_scores_for_row(row,pop_agg):
         absv[label]=val if not pd.isna(val) else np.nan
         scores[label]=norm_run_metric(pop_agg,eng,val)
     arr=[v for v in scores.values() if not pd.isna(v)]
-    idx=float(np.mean(arr)) if arr else np.nan
-    return {RUN_KEY:scores},absv,idx
+    return {RUN_KEY:scores},absv,(float(np.mean(arr)) if arr else np.nan)
 
-# ---------- Render karty ----------
+# ---------- Render ----------
 def render_card_visual(player,team,pos,age,scores,sec_index,overall_base,verdict,
                        run_scores=None,run_abs=None,run_index=np.nan,final_index=None):
     fig,ax=plt.subplots(figsize=(18,12)); ax.axis("off")
@@ -236,8 +239,7 @@ def render_card_visual(player,team,pos,age,scores,sec_index,overall_base,verdict
     ax.text(0.02,0.93,f"Klub: {team}   Pozice: {pos}",fontsize=13,va="top")
     y0=0.88
     for title,lst,key in blocks:
-        ax.text(0.02,y0,title,fontsize=15,fontweight="bold",va="top"); y=y0-0.04
-        L,R=0.04,0.26
+        ax.text(0.02,y0,title,fontsize=15,fontweight="bold",va="top"); y=y0-0.04; L,R=0.04,0.26
         for i,(_,lab) in enumerate(lst):
             val=scores[key].get(lab,np.nan); x=L if i%2==0 else R
             ax.add_patch(Rectangle((x,y-0.018),0.18,0.034,color=color_for(val),alpha=0.85,lw=0))
@@ -266,7 +268,7 @@ def render_card_visual(player,team,pos,age,scores,sec_index,overall_base,verdict
     v=overall_base if final_index is None else final_index
     ax.add_patch(Rectangle((0.55,y-0.03),0.38,0.05,color=color_for(v),alpha=0.7,lw=0))
     ax.text(0.56,y-0.005,f"{label}: {'n/a' if pd.isna(v) else str(int(round(v)))+'%'}",fontsize=14,fontweight="bold",va="center",ha="left")
-    ax.add_patch(Rectangle((0.55,0.02),0.38,0.07,color='lightgrey',alpha=0.35,lw=0))
+    ax.add_patch(Rectangle((0.55,0.02),0.38,0.07),)
     ax.text(0.74,0.055,f"Verdikt: {verdict}",fontsize=12,ha="center",va="center")
     return fig
 
@@ -287,11 +289,11 @@ def render_run_card(player,team,pos,age,run_scores,run_abs,run_index,verdict):
     ax.text(0.7,0.86,"Souhrn",fontsize=15,fontweight="bold",va="top")
     ax.add_patch(Rectangle((0.7,0.79),0.26,0.06,color=color_for(run_index),alpha=0.8,lw=0))
     ax.text(0.71,0.81,f"Běžecký index: {'n/a' if pd.isna(run_index) else str(int(round(run_index)))+'%'}",fontsize=13,va="center",ha="left")
-    ax.add_patch(Rectangle((0.7,0.12),0.26,0.06,color='lightgrey',alpha=0.5,lw=0))
+    ax.add_patch(Rectangle((0.7,0.12),0.26,0.06))
     ax.text(0.83,0.15,f"Verdikt: {verdict}",fontsize=12,ha="center",va="center")
     return fig
 
-# ---------- Sidebar: váhy ----------
+# ---------- Sidebar váhy ----------
 st.sidebar.header("⚙️ Váhy sekcí")
 defaults={"Defenziva":25,"Ofenziva":25,"Přihrávky":25,"1v1":25}
 sec_w={k:st.sidebar.slider(k,0,100,defaults[k],1) for k in defaults}
@@ -300,7 +302,8 @@ for k in sec_w: sec_w[k]=100.0*sec_w[k]/tot
 metric_w={}
 with st.sidebar.expander("Váhy metrik v sekcích (volitelné)",expanded=False):
     for title,lst,key in blocks:
-        st.markdown(f"**{title}**"); tmp={lab:st.slider(f"– {lab}",0,100,10,1,key=f"{key}_{lab}") for _,lab in lst}
+        st.markdown(f"**{title}**")
+        tmp={lab:st.slider(f"– {lab}",0,100,10,1,key=f"{key}_{lab}") for _,lab in lst}
         s=sum(tmp.values()); metric_w[key]=None if s==0 else {lab:w/s for lab,w in tmp.items()}
 
 # ---------- Tabs ----------
@@ -318,7 +321,7 @@ with tab_card:
 
     if not league_file or not players_file:
         st.info("➡️ Nahraj minimálně CZ herní dataset + hráčský herní export."); st.stop()
-    league=pd.read_excel(league_file); players=pd.read_excel(players_file)
+    league,players=pd.read_excel(league_file),pd.read_excel(players_file)
 
     run_cz_df = auto_fix_run_df(pd.read_excel(run_cz_file), league) if run_cz_file else None
     run_pl_df = auto_fix_run_df(pd.read_excel(run_players_file), players) if run_players_file else None
@@ -434,7 +437,7 @@ with tab_search:
                     rows.append({"Hráč":player,"Věk":age,"Klub":team,"Pozice":pos,"Liga":league_name,
                                  "Index Def":sec_idx.get("Defenziva",np.nan),"Index Off":sec_idx.get("Ofenziva",np.nan),
                                  "Index Pass":sec_idx.get("Přihrávky",np.nan),"Index 1v1":sec_idx.get("1v1",np.nan),
-                                 "Role-index (vážený)":overall,"Run index":run_idx,"Final index":final_idx if (not pd.isna(run_idx) and w_run>0) else np.nan,
+                                 "Role-index (vážený)":overall,"Run index":run_idx,"Final index":final_idx if (not pd.isna(run_idx) and w_run>0) else overall,
                                  "Verdikt":verdict})
                     fig=render_card_visual(player,team,pos,age,scores,sec_idx,overall,verdict,r_scores,r_abs,run_idx,
                                            final_index=(final_idx if (not pd.isna(run_idx) and w_run>0) else None))
@@ -494,7 +497,6 @@ with tab_run:
         any_run=auto_fix_run_df(pd.read_excel(any_run_file), None)
         sel=st.selectbox("Vyber hráče (běžecký export)", any_run[get_player_col(any_run)].dropna().unique().tolist())
         row=any_run.loc[any_run[get_player_col(any_run)]==sel].iloc[0]
-        # pokud máme aspoň nějakou pozici, zkusíme filtrovat benchmark
         pg=pos_group(row.get("Position",""))
         if get_pos_col(cz_run):
             rgx=POS_REGEX[pg]; cz_pos=cz_run[cz_run[get_pos_col(cz_run)].astype(str).str.contains(rgx,na=False,regex=True)]
@@ -502,7 +504,6 @@ with tab_run:
         else:
             cz_agg=cz_run.groupby(get_player_col(cz_run) or "Player").mean(numeric_only=True)
         r_scores,r_abs,run_idx = run_scores_for_row(row, cz_agg)
-        # verdikt (běžecky): 55%+ ANO, 45–55% OK, jinak NE
         verdict = "ANO – běžecky vhodný (55%+)" if (not pd.isna(run_idx) and run_idx>=55) else ("OK – šedá zóna (45–55%)" if (not pd.isna(run_idx) and run_idx>=45) else "NE – běžecky pod úrovní")
         fig=render_run_card(row.get("Player",""),row.get("Team",""),row.get("Position","—"),row.get("Age","n/a"),r_scores,r_abs,run_idx,verdict)
         st.pyplot(fig)
