@@ -671,44 +671,43 @@ with tab_run:
     with c2:
         fr_run_file = st.file_uploader("Běžecká data – libovolná liga (xlsx)", type=["xlsx"], key="fr_run_solo")
 
-    if cz_run_file and fr_run_file:
-        cz_run = auto_fix_run_df(pd.read_excel(cz_run_file), pd.DataFrame())
-        fr_run = auto_fix_run_df(pd.read_excel(fr_run_file), pd.DataFrame())
-
-        players_list = (fr_run[get_player_col(fr_run)] if get_player_col(fr_run) else fr_run["Player"]).dropna().unique().tolist()
-        sel = st.selectbox("Vyber hráče (běžecký export)", players_list)
-
-        posc = get_pos_col(cz_run)
-        rgx_all = ".*"  # bez pozice – čistě globální benchmark (nebo podle pozice, pokud existuje)
-        cz_run_pos = cz_run[cz_run[posc].astype(str).str.contains(rgx_all, na=False, regex=True)] if posc else cz_run.copy()
-
-        plc = get_player_col(fr_run)
-        r_run_cand = fr_run.loc[fr_run[plc]==sel] if plc else pd.DataFrame()
-        run_scores={RUN_KEY:{}}; run_abs={}; run_index=np.nan
-        if not cz_run_pos.empty and not r_run_cand.empty:
-            r_run = r_run_cand.iloc[0]
-            run_index, run_scores, run_abs = run_index_for_row(r_run, cz_run_pos)
-
-        # jednoduchý verdikt pro běh (medián CZ)
-        cz_tmp = cz_run_pos.copy()
-        cz_tmp = cz_tmp.groupby(get_player_col(cz_tmp) or "Player").mean(numeric_only=True)
-        med_idx_vals=[]
-        for eng,_ in RUN:
-            s=series_for_alias_run(cz_tmp, eng)
-            if s is not None and not s.dropna().empty:
-                med = s.median()
-                val = value_with_alias_run(r_run_cand.iloc[0], eng) if not r_run_cand.empty else np.nan
-                if not pd.isna(val): med_idx_vals.append(100.0 if val>=med else 0.0)
-        run_median_pass = (np.mean(med_idx_vals) if med_idx_vals else np.nan)
-        verdict = "ANO – běžecky vhodný" if (not pd.isna(run_index) and run_index >= 50) else "NE – běžecky pod mediánem CZ"
-
-        fig = render_run_only(sel, r_run_cand.iloc[0].get("Team","") if not r_run_cand.empty else "",
-                              r_run_cand.iloc[0].get("Position","") if not r_run_cand.empty else "",
-                              r_run_cand.iloc[0].get("Age","n/a") if not r_run_cand.empty else "n/a",
-                              run_scores, run_abs, run_index, verdict)
-        st.pyplot(fig)
-    else:
+    if not cz_run_file or not fr_run_file:
         st.info("Nahraj CZ běžecký benchmark i zahraniční běžecký export.")
+        st.stop()
+
+    cz_run = auto_fix_run_df(pd.read_excel(cz_run_file), pd.DataFrame())
+    fr_run = auto_fix_run_df(pd.read_excel(fr_run_file), pd.DataFrame())
+
+    plc_fr = get_player_col(fr_run) or "Player"
+    players_list = fr_run[plc_fr].dropna().astype(str).unique().tolist()
+    sel = st.selectbox("Vyber hráče (běžecký export)", players_list)
+
+    # CZ benchmark – bez rozlišení pozice (nebo vše, co je k dispozici)
+    cz_run_pos = cz_run.copy()
+
+    # řádek hráče
+    r_run_cand = fr_run.loc[fr_run[plc_fr] == sel]
+    run_scores = {RUN_KEY: {}}
+    run_abs = {}
+    run_index = np.nan
+
+    if not cz_run_pos.empty and not r_run_cand.empty:
+        r_run = r_run_cand.iloc[0]
+        run_index, run_scores, run_abs = run_index_for_row(r_run, cz_run_pos)
+
+    # Verdikt bez ternárního operátoru (kvůli syntaxi)
+    if (not pd.isna(run_index)) and float(run_index) >= 50.0:
+        verdict = "ANO - běžecky vhodný"
+    else:
+        verdict = "NE - běžecky pod mediánem CZ"
+
+    # vykreslení karty
+    team = r_run_cand.iloc[0].get("Team", "") if not r_run_cand.empty else ""
+    pos = r_run_cand.iloc[0].get("Position", "") if not r_run_cand.empty else ""
+    age = r_run_cand.iloc[0].get("Age", "n/a") if not r_run_cand.empty else "n/a"
+
+    fig = render_run_only(sel, team, pos, age, run_scores, run_abs, run_index, verdict)
+    st.pyplot(fig)
 
 
 
