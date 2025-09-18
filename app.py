@@ -1,4 +1,4 @@
-# app.py — Slavia datacards (role-aware running; žádné míchání pozic)
+# app.py — Slavia datacards (role-aware running; strict role matching; name-key fix)
 import re, unicodedata, zipfile
 from io import BytesIO
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
@@ -200,7 +200,6 @@ WYS_TO_ROLE = {
     # Strikers
     "CF":"CF","ST":"CF","FW":"CF","FORWARD":"CF","STRIKER":"CF",
 }
-# heuristiky pro free text
 ROLE_PATTERNS = [
     ("CB",  r"(CB|CENTRE\s*BACK|CENTER\s*BACK|CENTRAL\s*DEF(ENDER)?|DEF(ENDER)?\b(?!.*MID))"),
     ("RB",  r"(RB|LB|RWB|LWB|WB|FULL\s*BACK|WING\s*BACK)"),
@@ -214,52 +213,70 @@ def _primary_wyscout_tag(pos_text:str) -> str:
     return str(pos_text).split(",")[0].strip().upper()
 
 def role5_from_pos_text(pos_text:str) -> str:
-    """1) první tag → WYS_TO_ROLE, 2) substringy známých kódů, 3) regex heuristiky."""
     if not pos_text: return ""
     first=_primary_wyscout_tag(pos_text)
     if first in WYS_TO_ROLE: return WYS_TO_ROLE[first]
-    # zkus najít známý kód uvnitř
     U=first.upper()
     for k in WYS_TO_ROLE:
         if k in U: return WYS_TO_ROLE[k]
-    # regex heuristiky (free text typu 'Centre Back')
     for role,pat in ROLE_PATTERNS:
         if re.search(pat, U, flags=re.IGNORECASE):
             return role
     return ""
 
 def ensure_role5_column(df):
-    """Dopočti/naprav Role5 z vlastního df['Position'] pokud chybí nebo je prázdné."""
     if df is None or df.empty: return df
     if "Role5" not in df.columns:
         df["Role5"]=np.nan
-    # jen kde je NaN/empty doplň z Position
     if "Position" in df.columns:
         mask = df["Role5"].isna() | (df["Role5"].astype(str).str.strip()=="")
         df.loc[mask, "Role5"] = df.loc[mask, "Position"].astype(str).map(role5_from_pos_text)
     return df
 
 def _attach_role5_from_game(run_df, game_df):
-    """Z herních dat vezmi primární pozici (první v řetězci), přemapuj na Role5 a přidej do run_df podle hráče."""
-    if run_df is None or run_df.empty: return run_df
+    """
+    Připíše do běžečných dat sloupec Role5 z herních dat.
+    Páruje podle klíče 'první iniciála + příjmení' (např. 'L|haraslin'),
+    aby seděly případy 'L. Haraslín' vs 'Lukáš Haraslín'.
+    """
+    if run_df is None or run_df.empty:
+        return run_df
+
     run_df = ensure_role5_column(run_df)
     if game_df is None or game_df.empty:
         return ensure_role5_column(run_df)
-    g=normalize_core_cols(game_df.copy())
-    if "Player" in g.columns and "Position" in g.columns:
-        tmp=g[["Player","Position"]].dropna().copy()
-        tmp["Role5"]=tmp["Position"].astype(str).map(role5_from_pos_text)
-        tmp=tmp.dropna(subset=["Role5"]).groupby("Player",as_index=False).agg({"Role5":"first"})
-        run_df["_k"]=run_df["Player"].astype(str).map(_normtxt)
-        tmp["_k"]=tmp["Player"].astype(str).map(_normtxt)
-        run_df=run_df.merge(tmp[["_k","Role5"]],on="_k",how="left",suffixes=("","_g")).drop(columns=["_k"])
-        # přednost dej game Role5 pokud chybí; jinak nech původní
-        mask = run_df["Role5"].isna() & run_df["Role5_g"].notna()
-        run_df.loc[mask,"Role5"] = run_df.loc[mask,"Role5_g"]
-        if "Role5_g" in run_df.columns: run_df = run_df.drop(columns=["Role5_g"])
-    # i tak dopočti z vlastního Position pro zbytek
-    run_df = ensure_role5_column(run_df)
-    return run_df
+
+    g = normalize_core_cols(game_df.copy())
+    if "Player" not in g.columns or "Position" not in g.columns:
+        return ensure_role5_column(run_df)
+
+    def _split_name_for_key(s):
+        t = _normtxt(s).replace(".", " ")
+        parts = [x for x in re.split(r"\s+", t) if x]
+        if not parts: return "", ""
+        sur = parts[-1]
+        first = next((x for x in parts if x != sur), "")
+        fi = first[0] if first else (parts[0][0] if parts else "")
+        return fi, sur
+
+    # mapa z herních dat: (fi|surname) -> Role5
+    tmp = g[["Player","Position"]].dropna().copy()
+    tmp["Role5"] = tmp["Position"].astype(str).map(role5_from_pos_text)
+    fi, sur = zip(*tmp["Player"].map(_split_name_for_key))
+    tmp["_k"] = pd.Series(fi, index=tmp.index) + "|" + pd.Series(sur, index=tmp.index)
+    tmp = tmp.dropna(subset=["Role5", "_k"]).groupby("_k", as_index=False).agg({"Role5":"first"})
+
+    # klíč v běžečných datech
+    fi2, sur2 = zip(*run_df["Player"].astype(str).map(_split_name_for_key))
+    run_df["_k"] = pd.Series(fi2, index=run_df.index) + "|" + pd.Series(sur2, index=run_df.index)
+
+    out = run_df.merge(tmp[["_k","Role5"]], on="_k", how="left", suffixes=("","_g"))
+    need = out["Role5"].isna() & out["Role5_g"].notna()
+    out.loc[need, "Role5"] = out.loc[need, "Role5_g"]
+
+    out = out.drop(columns=["_k","Role5_g"], errors="ignore")
+    out = ensure_role5_column(out)
+    return out
 
 # ---------- Running ----------
 RUN=[("Total distance per 90","Total distance /90"),
@@ -309,14 +326,14 @@ def _post_run(df):
         dec=[c for c in ["High Deceleration Count P90","Medium Deceleration Count P90"] if c in df.columns]
         if dec:
             s=pd.to_numeric(df[dec[0]],errors="coerce")
-            for c in acc[1:]: s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0) if 'acc' in locals() else s
+            for c in dec[1:]: s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
             df["Decelerations per 90"]=s
     for c in ["Player","Team","Position"]:
         if c in df.columns: df[c]=df[c].astype(str).str.strip()
     return df
 
 def auto_fix_run_df(run_df, game_df):
-    """Normalizace běžečných dat + **dopočítání Role5** (z herních, nebo z vlastního Position/heuristiky)."""
+    """Normalizace běžečných dat + Role5 (z herních; fallback z vlastního Position/heuristik)."""
     if run_df is None or run_df.empty: return run_df
     id_map={}
     if "Player" not in run_df.columns:   c=_best_col(run_df,["Name","player","name","Short Name"]);  id_map.update({c:"Player"} if c else {})
@@ -324,7 +341,6 @@ def auto_fix_run_df(run_df, game_df):
     if "Position" not in run_df.columns: c=_best_col(run_df,["Pos","Role","Primary position","position"]); id_map.update({c:"Position"} if c else {})
     if id_map: run_df=run_df.rename(columns=id_map)
     run_df=ensure_run_wide(run_df); run_df=_post_run(run_df)
-    # Role5: z herních + fallback z vlastního Position/heuristik
     run_df=_attach_role5_from_game(run_df, game_df)
     run_df=ensure_role5_column(run_df)
     return run_df
@@ -451,11 +467,10 @@ with tab_card:
         sel=st.selectbox("Vyber hráče (běžecký export)", any_run[pcol].dropna().unique().tolist())
         row=any_run.loc[any_run[pcol]==sel].iloc[0]
         role5=row.get("Role5","") or role5_from_pos_text(row.get("Position",""))
-        # STRICT role filter for benchmark
         if role5:
             cz_base = cz_run[cz_run.get("Role5","").astype(str)==role5]
         else:
-            cz_base = pd.DataFrame()  # bez role raději nespouštět
+            cz_base = pd.DataFrame()
         if cz_base is None or cz_base.empty:
             st.warning("Chybí CZ benchmark pro danou roli (běžecká). Běžecký index nebude vypočten.")
             r_scores,r_abs,run_idx={RUN_KEY:{}},{},np.nan
@@ -478,7 +493,6 @@ with tab_card:
     row=players.loc[players["Player"]==sel].iloc[0]
     player,team,pos,age,nat=row.get("Player",""),row.get("Team",""),row.get("Position",""),row.get("Age","n/a"),row.get("Nationality","")
 
-    # herní benchmark (původní logika po skupinách)
     pg=pos_group(pos); rgx=POS_REGEX[pg]
     cz_pos=league[league["Position"].astype(str).str.contains(rgx,na=False,regex=True)]
     agg=cz_pos.groupby("Player").mean(numeric_only=True)
@@ -488,10 +502,7 @@ with tab_card:
     run_scores=run_abs=None; run_idx=np.nan; role5=role5_from_pos_text(pos) or None
     if run_cz_df is not None and run_pl_df is not None:
         cand=match_by_name(run_pl_df, player, team_hint=team, age_hint=age, nat_hint=nat)
-        if role5:
-            cz_base=run_cz_df[run_cz_df.get("Role5","").astype(str)==role5]
-        else:
-            cz_base=pd.DataFrame()
+        cz_base = run_cz_df[run_cz_df.get("Role5","").astype(str)==role5] if role5 else pd.DataFrame()
         if cand.empty or cz_base.empty:
             if cand.empty:
                 st.warning("Nenalezen odpovídající řádek v běžečných datech hráče.")
@@ -608,5 +619,6 @@ with tab_search:
                 safe=str(name).replace("/","_").replace("\\","_"); zf.writestr(f"{safe}.png", png)
         st.download_button("🗂️ Stáhnout všechny karty (ZIP)", data=zbuf.getvalue(),
                            file_name=f"karty_{st.session_state.get('search_league','liga')}.zip", mime="application/zip")
+
 
 
