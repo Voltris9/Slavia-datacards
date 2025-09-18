@@ -1,4 +1,4 @@
-# app.py — Slavia datacards (herní + běžecká v jedné kartě + robustní matching)
+# app.py — Slavia datacards (herní + běžecká v jedné kartě, smart matching jmen)
 import zipfile, unicodedata, re
 from io import BytesIO
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
@@ -54,15 +54,66 @@ def _normtxt(s:str)->str:
     s = "".join(c for c in s if not unicodedata.combining(c))
     return re.sub(r"\s+"," ",s).strip().lower()
 
-def match_by_name(df: pd.DataFrame, name: str) -> pd.DataFrame:
-    """Očištěné párování jména (bez diakritiky, case, vícenásobných mezer)."""
+# --- SMART MATCHING: „Z. Iqbal“ ⇄ „Zidane Iqbal“ (+ tým) ---
+def _split_name(s: str):
+    """Vrátí (first_initial, surname) z libovolného formátu."""
+    t = _normtxt(s).replace(".", " ")
+    parts = [p for p in re.split(r"\s+", t) if p]
+    if not parts: return "", ""
+    surname = parts[-1]
+    first = next((p for p in parts if p and p != surname), "")
+    first_initial = first[0] if first else (parts[0][0] if parts else "")
+    return first_initial, surname
+
+def _norm_team(s: str) -> str:
+    """Zjednoduší název klubu (odstraní FC/FK/SC/AC/… a whitespace)."""
+    t = _normtxt(s)
+    t = re.sub(r"\b(fk|fc|sc|ac|cf|afc|sv|us|cd|ud|bk|sk|ks)\b", " ", t)
+    return re.sub(r"\s+"," ",t).strip()
+
+def match_by_name(df: pd.DataFrame, name: str, team_hint: str = None) -> pd.DataFrame:
+    """Pořadí matchů: 1) přesná očista, 2) příjmení+iniciála, 3) příjmení+tým, 4) jedinečné příjmení."""
     if df is None or df.empty or not name: return pd.DataFrame()
-    col = get_player_col(df) or "Player"
-    if col not in df.columns: return pd.DataFrame()
+    pcol = get_player_col(df) or "Player"
+    if pcol not in df.columns: return pd.DataFrame()
+
+    # připrav cache klíčů
     if "_kname" not in df.columns:
-        df["_kname"] = df[col].astype(str).map(_normtxt)
-    key = _normtxt(name)
-    return df.loc[df["_kname"] == key]
+        df["_kname"] = df[pcol].astype(str).map(_normtxt)
+        fi, sn = zip(*df[pcol].astype(str).map(_split_name))
+        df["_kfirst"] = list(fi)
+        df["_ksurname"] = list(sn)
+        tcol = _best_col(df, ["Team","Club","team","club"])
+        df["_kteam"] = df[tcol].astype(str).map(_norm_team) if tcol else ""
+
+    key_full = _normtxt(name)
+    fi_key, sn_key = _split_name(name)
+    team_key = _norm_team(team_hint) if team_hint else ""
+
+    # 1) přesná očista
+    exact = df.loc[df["_kname"] == key_full]
+    if len(exact) == 1: return exact
+    if len(exact) > 1 and team_key:
+        pick = exact.loc[exact["_kteam"] == team_key]
+        if not pick.empty: return pick
+
+    # 2) příjmení + iniciála
+    si = df.loc[(df["_ksurname"] == sn_key) & (df["_kfirst"] == fi_key)]
+    if len(si) == 1: return si
+    if len(si) > 1 and team_key:
+        pick = si.loc[si["_kteam"] == team_key]
+        if not pick.empty: return pick
+
+    # 3) příjmení + tým
+    if team_key:
+        st = df.loc[(df["_ksurname"] == sn_key) & (df["_kteam"] == team_key)]
+        if len(st) == 1: return st
+
+    # 4) jedinečné příjmení
+    sn = df.loc[df["_ksurname"] == sn_key]
+    if len(sn) == 1: return sn
+
+    return pd.DataFrame()
 
 # ---------- Herní bloky ----------
 DEF=[("Defensive duels per 90","Defenzivní duely /90"),("Defensive duels won, %","Úspěšnost obr. duelů %"),
@@ -87,25 +138,22 @@ ALIASES={"Cross accuracy, %":["Accurate crosses, %","Cross accuracy, %"],
 
 def get_val_alias(row,key):
     if key in row.index: return row[key]
-    for c in ALIASES.get(key,[]):
+    for c in ALIASES.get(key,[]): 
         if c in row.index: return row[c]
-    if key=="Cross accuracy, %" and "Accurate crosses, %" in row.index:
-        return row["Accurate crosses, %"]
+    if key=="Cross accuracy, %" and "Accurate crosses, %" in row.index: return row["Accurate crosses, %"]
     return np.nan
 
 def series_alias(df,key):
     if key in df.columns: return df[key]
-    for c in ALIASES.get(key,[]):
+    for c in ALIASES.get(key,[]): 
         if c in df.columns: return df[c]
-    if key=="Cross accuracy, %" and "Accurate crosses, %" in df.columns:
-        return df["Accurate crosses, %"]
+    if key=="Cross accuracy, %" and "Accurate crosses, %" in df.columns: return df["Accurate crosses, %"]
     return None
 
 def norm_metric(pop_df,key,val):
     s=series_alias(pop_df,key)
     if s is None or pd.isna(val): return np.nan
-    s=pd.to_numeric(s,errors="coerce").dropna()
-    v=pd.to_numeric(pd.Series([val]),errors="coerce").iloc[0]
+    s=pd.to_numeric(s,errors="coerce").dropna(); v=pd.to_numeric(pd.Series([val]),errors="coerce").iloc[0]
     if s.empty or pd.isna(v): return np.nan
     mn,mx=s.min(),s.max()
     return 50.0 if mx==mn else float(np.clip((v-mn)/(mx-mn)*100,0,100))
@@ -116,8 +164,8 @@ def section_scores(row,agg,metric_weights=None):
         vals={label:norm_metric(agg,eng,get_val_alias(row,eng)) for eng,label in lst}
         sec_scores[key]=vals
         if metric_weights and metric_weights.get(key):
-            w=metric_weights[key]; wsum=sum(w.values())
-            sec_idx[key]=float(sum(v*w.get(lbl,0) for lbl,v in vals.items() if not pd.isna(v))/wsum) if wsum>0 else np.nan
+            wsum=sum(metric_weights[key].values())
+            sec_idx[key]=float(sum(v*metric_weights[key].get(lbl,0) for lbl,v in vals.items() if not pd.isna(v))/wsum) if wsum>0 else np.nan
         else:
             arr=[v for v in vals.values() if not pd.isna(v)]
             sec_idx[key]=float(np.mean(arr)) if arr else np.nan
@@ -127,9 +175,8 @@ def role_index(sec_idx,weights):
     acc=tot=0.0
     for k in ["Defenziva","Ofenziva","Přihrávky","1v1"]:
         v=sec_idx.get(k,np.nan)
-        if not pd.isna(v):
-            w=weights.get(k,0)/100.0
-            acc+=v*w; tot+=w
+        if not pd.isna(v): 
+            w=weights.get(k,0)/100.0; acc+=v*w; tot+=w
     return float(acc/tot) if tot>0 else np.nan
 
 # ---------- Pozice + peers ----------
@@ -204,16 +251,16 @@ def _post_run(df):
     if "Average speed (km/h)" not in df.columns and "M/min P90" in df.columns:
         df["Average speed (km/h)"]=pd.to_numeric(df["M/min P90"],errors="coerce")*0.06
     if "Accelerations per 90" not in df.columns:
-        acc_cols=[c for c in ["High Acceleration Count P90","Medium Acceleration Count P90"] if c in df.columns]
-        if acc_cols:
-            s=pd.to_numeric(df[acc_cols[0]],errors="coerce")
-            for c in acc_cols[1:]: s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
+        acc=[c for c in ["High Acceleration Count P90","Medium Acceleration Count P90"] if c in df.columns]
+        if acc:
+            s=pd.to_numeric(df[acc[0]],errors="coerce")
+            for c in acc[1:]: s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
             df["Accelerations per 90"]=s
     if "Decelerations per 90" not in df.columns:
-        dec_cols=[c for c in ["High Deceleration Count P90","Medium Deceleration Count P90"] if c in df.columns]
-        if dec_cols:
-            s=pd.to_numeric(df[dec_cols[0]],errors="coerce")
-            for c in dec_cols[1:]: s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
+        dec=[c for c in ["High Deceleration Count P90","Medium Deceleration Count P90"] if c in df.columns]
+        if dec:
+            s=pd.to_numeric(df[dec[0]],errors="coerce")
+            for c in dec[1:]: s=s.add(pd.to_numeric(df[c],errors="coerce"),fill_value=0)
             df["Decelerations per 90"]=s
     for c in ["Player","Team","Position"]:
         if c in df.columns: df[c]=df[c].astype(str).str.strip()
@@ -347,11 +394,10 @@ with tab_card:
     scores,sec_idx = section_scores(row, agg, metric_w)
     overall = role_index(sec_idx, sec_w)
 
-    # ---- běžecká část (robustní matching) ----
-    run_scores = run_abs = None
-    run_index = np.nan
+    # ---- běžecká část (smart matching) ----
+    run_scores = run_abs = None; run_index = np.nan
     if run_cz_df is not None and run_pl_df is not None:
-        cand_df = match_by_name(run_pl_df, player)
+        cand_df = match_by_name(run_pl_df, player, team_hint=team)
         # benchmark podle pozice, nebo celý když pozice chybí
         poscol = get_pos_col(run_cz_df)
         if poscol:
@@ -378,7 +424,7 @@ with tab_card:
     bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight")
     st.download_button("📥 Stáhnout kartu jako PNG", data=bio.getvalue(), file_name=f"{player}.png", mime="image/png")
 
-# === TAB 2: vyhledávání (respektuje váhu běhu) ===
+# === TAB 2: vyhledávání (smart matching + respektuje váhu běhu) ===
 with tab_search:
     st.subheader("Vyhledávání kandidátů pro Slavii (benchmark = CZ liga)")
     cA,cB=st.columns(2)
@@ -429,7 +475,7 @@ with tab_search:
 
                 run_idx=np.nan; r_scores=None; r_abs=None
                 if cz_run_df is not None and fr_run_df is not None:
-                    cand_df=match_by_name(fr_run_df, r.get("Player",""))
+                    cand_df=match_by_name(fr_run_df, r.get("Player",""), team_hint=r.get("Team",""))
                     poscol=get_pos_col(cz_run_df)
                     if poscol:
                         cz_run_pos=cz_run_df[cz_run_df[poscol].astype(str).str.contains(rgx,na=False,regex=True)]
@@ -485,7 +531,7 @@ with tab_search:
                 scores,sec_idx=section_scores(r,cz_agg,metric_w); overall=role_index(sec_idx,sec_w)
                 run_idx=np.nan; run_scores=None; run_abs=None
                 if cz_run_df is not None and fr_run_df is not None:
-                    cand_df=match_by_name(fr_run_df, sel)
+                    cand_df=match_by_name(fr_run_df, sel, team_hint=r.get("Team",""))
                     poscol=get_pos_col(cz_run_df)
                     if poscol:
                         cz_run_pos=cz_run_df[cz_run_df[poscol].astype(str).str.contains(rgx,na=False,regex=True)]
@@ -502,5 +548,6 @@ with tab_search:
                 fig=render_card_visual(r.get("Player",""),r.get("Team",""),r.get("Position",""),r.get("Age","n/a"),
                                        scores,sec_idx,overall,verdict,run_scores,run_abs,run_idx,final_index=final_idx)
                 st.pyplot(fig)
+
 
 
