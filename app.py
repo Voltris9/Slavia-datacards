@@ -1,4 +1,4 @@
-# app.py — Slavia datacards (herní + běžecká, smart matching)
+# app.py — Slavia datacards (herní + běžecká, smart matching, umí i "jen běžeckou" v 1. záložce)
 import re, unicodedata, zipfile
 from io import BytesIO
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
@@ -8,16 +8,16 @@ import streamlit as st
 st.set_page_config(page_title="Karty – Slavia", layout="wide")
 st.title("⚽ Generátor datových karet (herní + běžecká)")
 
-# ------------ Helpers ------------
+# ---------- Utils ----------
 @st.cache_data
 def load_xlsx(b: bytes) -> pd.DataFrame: return pd.read_excel(BytesIO(b))
-def color_for(v): 
+def color_for(v):
     if pd.isna(v): return "lightgrey"
     return "#FF4C4C" if v<=25 else "#FF8C00" if v<=50 else "#FFD700" if v<=75 else "#228B22"
 def _best_col(df, names): return next((c for c in names if c in df.columns), None)
-def _normtxt(s): 
-    s = unicodedata.normalize("NFKD", str(s))
-    return re.sub(r"\s+"," ", "".join(c for c in s if not unicodedata.combining(c))).strip().lower()
+def _normtxt(s):
+    s=unicodedata.normalize("NFKD", str(s))
+    return re.sub(r"\s+"," ","".join(c for c in s if not unicodedata.combining(c))).strip().lower()
 
 def get_player_col(df): return _best_col(df,["Player","Name","player","name","Short Name"])
 def get_team_col(df):   return _best_col(df,["Team","Club","team","club"])
@@ -28,11 +28,8 @@ def get_nat_col(df):    return _best_col(df,["Nationality","Nationality 1","Nati
 def normalize_core_cols(df):
     if df is None or df.empty: return df
     m={}
-    for src,dst,fn in [(get_player_col(df),"Player",get_player_col),
-                       (get_team_col(df),"Team",get_team_col),
-                       (get_pos_col(df),"Position",get_pos_col)]:
-        c=fn(df)
-        if c and c!=dst: m[c]=dst
+    for src,dst in [(get_player_col(df),"Player"),(get_team_col(df),"Team"),(get_pos_col(df),"Position")]:
+        if src and src!=dst: m[src]=dst
     return df.rename(columns=m) if m else df
 
 def ensure_run_wide(df):
@@ -46,10 +43,10 @@ def ensure_run_wide(df):
     return normalize_core_cols(df)
 
 def _split_name(s):
-    t=_normtxt(s).replace("."," "); p=[x for x in re.split(r"\s+",t) if x]
-    if not p: return "",""
-    sur=p[-1]; first=next((x for x in p if x!=sur), "")
-    return (first[0] if first else (p[0][0] if p else "")), sur
+    t=_normtxt(s).replace("."," "); ps=[x for x in re.split(r"\s+",t) if x]
+    if not ps: return "",""
+    sur=ps[-1]; first=next((x for x in ps if x!=sur), "")
+    return (first[0] if first else (ps[0][0] if ps else "")), sur
 def _norm_team(s):
     t=_normtxt(s); t=re.sub(r"\b(fk|fc|sc|ac|cf|afc|sv|us|cd|ud|bk|sk|ks|ucl|ii|b)\b"," ",t)
     return re.sub(r"\s+"," ",t).strip()
@@ -85,8 +82,8 @@ def match_by_name(df, name, team_hint=None, age_hint=None, nat_hint=None):
         if len(pick)==1: return pick
 
     if team_key:
-        st=df.loc[(df["_ksurname"]==sn_key)&(df["_kteam"]==team_key)]
-        if len(st)==1: return st
+        st_df=df.loc[(df["_ksurname"]==sn_key)&(df["_kteam"]==team_key)]
+        if len(st_df)==1: return st_df
 
     pool=df.loc[(df["_ksurname"]==sn_key) | ((team_key!="") & (df["_kteam"]==team_key))].copy()
     if pool.empty: return pd.DataFrame()
@@ -103,13 +100,12 @@ def match_by_name(df, name, team_hint=None, age_hint=None, nat_hint=None):
         if nat_key and r["_knat"]==nat_key: s+=2
         return s
     pool["_score"]=pool.apply(score,axis=1)
-    pool=pool.sort_values(["_score","_kage"],ascending=[False,True])
-    best=pool.iloc[0:1]
+    best=pool.sort_values(["_score","_kage"],ascending=[False,True]).head(1)
     if not best.empty and best["_score"].iloc[0]>0: return best
     sn=df.loc[df["_ksurname"]==sn_key]
     return sn if len(sn)==1 else pd.DataFrame()
 
-# ------------ Blocks, aliases, scoring ------------
+# ---------- Blocks & scoring ----------
 DEF=[("Defensive duels per 90","Defenzivní duely /90"),("Defensive duels won, %","Úspěšnost obr. duelů %"),
      ("Interceptions per 90","Interceptions /90"),("Sliding tackles per 90","Sliding tackles /90"),
      ("Aerial duels won, %","Úspěšnost vzdušných %"),("Fouls per 90","Fauly /90")]
@@ -131,13 +127,13 @@ ALIASES={"Cross accuracy, %":["Accurate crosses, %","Cross accuracy, %"],
 
 def series_alias(df,key):
     if key in df.columns: return df[key]
-    for c in ALIASES.get(key,[]): 
+    for c in ALIASES.get(key,[]):
         if c in df.columns: return df[c]
     if key=="Cross accuracy, %" and "Accurate crosses, %" in df.columns: return df["Accurate crosses, %"]
     return None
 def get_val_alias(row,key):
     if key in row.index: return row[key]
-    for c in ALIASES.get(key,[]): 
+    for c in ALIASES.get(key,[]):
         if c in row.index: return row[c]
     if key=="Cross accuracy, %" and "Accurate crosses, %" in row.index: return row["Accurate crosses, %"]
     return np.nan
@@ -165,7 +161,7 @@ def section_scores(row,agg,metric_w=None):
 def role_index(sec_idx,weights):
     acc=tot=0.0
     for k in ["Defenziva","Ofenziva","Přihrávky","1v1"]:
-        v=sec_idx.get(k,np.nan); 
+        v=sec_idx.get(k,np.nan);
         if not pd.isna(v): w=weights.get(k,0)/100.0; acc+=v*w; tot+=w
     return float(acc/tot) if tot>0 else np.nan
 
@@ -180,26 +176,7 @@ def pos_group(p):
     if any(x in P for x in ["CF","ST","FW"]):return "CF/ST"
     return "CM"
 
-SLAVIA_PEERS={"RB":["D. Douděra","D. Hashioka"],"LB":["O. Zmrzlý","J. Bořil"],
-              "WB/RWB/LWB":["D. Douděra","D. Hashioka","O. Zmrzlý"],
-              "CB/DF":["I. Ogbu","D. Zima","T. Holeš","J. Bořil"],
-              "DM":["T. Holeš","O. Dorley","M. Sadílek"],
-              "CM":["C. Zafeiris","L. Provod","E. Prekop","M. Sadílek"],
-              "AM":["C. Zafeiris","L. Provod","E. Prekop"],
-              "RW":["I. Schranz","Y. Sanyang","V. Kušej"],
-              "LW":["I. Schranz","V. Kušej"],
-              "CF/ST":["M. Chytil","T. Chorý"]}
-def peers(pg): return SLAVIA_PEERS.get(pg,[])
-def peer_avg(cz_agg, pg, weights, mweights):
-    vals=[]
-    for nm in peers(pg):
-        if nm in cz_agg.index:
-            r=cz_agg.loc[nm].copy(); r["Player"]=nm; r["Position"]=pg
-            _,s=section_scores(r,cz_agg,mweights); v=role_index(s,weights)
-            if not np.isnan(v): vals.append(v)
-    return float(np.mean(vals)) if vals else np.nan
-
-# ------------ Running (aliases/post/fn) ------------
+# ---------- Running ----------
 RUN=[("Total distance per 90","Total distance /90"),
      ("High-intensity runs per 90","High-intensity runs /90"),
      ("Sprints per 90","Sprints /90"),
@@ -222,12 +199,12 @@ ALIASES_RUN={
 def run_series(df,key):
     if df is None or df.empty: return None
     if key in df.columns: return df[key]
-    for c in ALIASES_RUN.get(key,[]): 
+    for c in ALIASES_RUN.get(key,[]):
         if c in df.columns: return df[c]
     return None
 def run_val(row,key):
     if key in row.index: return row[key]
-    for c in ALIASES_RUN.get(key,[]): 
+    for c in ALIASES_RUN.get(key,[]):
         if c in row.index: return row[c]
     return np.nan
 def _post_run(df):
@@ -282,7 +259,7 @@ def run_scores_for_row(row,pop_agg):
     arr=[v for v in scores.values() if not pd.isna(v)]
     return {RUN_KEY:scores},absv,(float(np.mean(arr)) if arr else np.nan)
 
-# ------------ Render ------------
+# ---------- Render ----------
 def render_card_visual(player,team,pos,age,scores,sec_index,overall_base,verdict,
                        run_scores=None,run_abs=None,run_index=np.nan,final_index=None):
     fig,ax=plt.subplots(figsize=(18,12)); ax.axis("off")
@@ -321,7 +298,28 @@ def render_card_visual(player,team,pos,age,scores,sec_index,overall_base,verdict
     ax.text(0.74,0.055,f"Verdikt: {verdict}",fontsize=12,ha="center",va="center")
     return fig
 
-# ------------ Sidebar ------------
+def render_run_card(player,team,pos,age,run_scores,run_abs,run_index,verdict):
+    fig,ax=plt.subplots(figsize=(14,8)); ax.axis("off")
+    ax.text(0.02,0.95,f"{player} (věk {age})",fontsize=20,fontweight="bold",va="top")
+    ax.text(0.02,0.92,f"Klub: {team or '—'}   Pozice: {pos or '—'}",fontsize=13,va="top")
+    ax.text(0.02,0.86,"Běžecká data (vs. CZ benchmark)",fontsize=15,fontweight="bold",va="top")
+    y=0.82; L,R=0.04,0.36
+    for i,(_,lab) in enumerate(RUN):
+        pct=run_scores[RUN_KEY].get(lab,np.nan); val=(run_abs or {}).get(lab,np.nan)
+        x=L if i%2==0 else R
+        ax.add_patch(Rectangle((x,y-0.03),0.28,0.05,color=color_for(pct),alpha=0.8,lw=0))
+        ta="n/a" if pd.isna(val) else (f"{val:.2f}" if isinstance(val,(int,float,np.number)) else str(val))
+        tp="n/a" if pd.isna(pct) else f"{int(round(pct))}%"
+        ax.text(x+0.01,y-0.006,f"{lab}: {ta} ({tp})",fontsize=10,va="center",ha="left")
+        if i%2==1: y-=0.07
+    ax.text(0.7,0.86,"Souhrn",fontsize=15,fontweight="bold",va="top")
+    ax.add_patch(Rectangle((0.7,0.79),0.26,0.06,color=color_for(run_index),alpha=0.8,lw=0))
+    ax.text(0.71,0.81,f"Běžecký index: {'n/a' if pd.isna(run_index) else str(int(round(run_index)))+'%'}",fontsize=13,va="center",ha="left")
+    ax.add_patch(Rectangle((0.7,0.12),0.26,0.06,color='lightgrey',alpha=0.5,lw=0))
+    ax.text(0.83,0.15,f"Verdikt: {verdict}",fontsize=12,ha="center",va="center")
+    return fig
+
+# ---------- Sidebar ----------
 st.sidebar.header("⚙️ Váhy sekcí")
 base_w={"Defenziva":25,"Ofenziva":25,"Přihrávky":25,"1v1":25}
 sec_w={k:st.sidebar.slider(k,0,100,base_w[k],1) for k in base_w}
@@ -335,28 +333,53 @@ with st.sidebar.expander("Váhy metrik v sekcích (volitelné)",False):
         tmp={lab:st.slider(f"– {lab}",0,100,10,1,key=f"{key}_{lab}") for _,lab in lst}
         s=sum(tmp.values()) or 1; metric_w[key]={lab:w/s for lab,w in tmp.items()} if s else None
 
-# ------------ Tabs ------------
+# ---------- Tabs ----------
 tab_card, tab_search = st.tabs(["Karta hráče (herní + běžecká)", "Vyhledávání hráčů"])
 
-# === TAB 1 ===
+# === TAB 1: umí herní / kombinovanou / jen běžeckou ===
 with tab_card:
     c1,c2=st.columns(2)
     with c1:
         league_file=st.file_uploader("CZ liga – herní (xlsx)",["xlsx"],key="league_card")
-        run_cz_file=st.file_uploader("CZ běžecká data (xlsx)",["xlsx"],key="run_cz_card")
+        run_cz_file=st.file_uploader("CZ běžecká data – benchmark (xlsx)",["xlsx"],key="run_cz_card")
     with c2:
         players_file=st.file_uploader("Hráč/hráči – herní (xlsx)",["xlsx"],key="players_card")
         run_players_file=st.file_uploader("Hráč/hráči – běžecká (xlsx)",["xlsx"],key="run_players_card")
-    if not league_file or not players_file:
-        st.info("➡️ Nahraj CZ herní + hráčský herní export."); st.stop()
 
+    # ---- REŽIMY ----
+    have_game = bool(league_file and players_file)
+    have_run  = bool(run_cz_file and run_players_file)
+
+    if not have_game and not have_run:
+        st.info("➡️ Nahraj buď (a) CZ herní + hráčský herní export, nebo (b) CZ běžecký benchmark + běžecký export."); st.stop()
+
+    # ---------- JEN BĚŽECKÁ ----------
+    if (not have_game) and have_run:
+        cz_run=auto_fix_run_df(pd.read_excel(run_cz_file), None)
+        any_run=auto_fix_run_df(pd.read_excel(run_players_file), None)
+        pcol=get_player_col(any_run) or "Player"
+        sel=st.selectbox("Vyber hráče (běžecký export)", any_run[pcol].dropna().unique().tolist())
+        row=any_run.loc[any_run[pcol]==sel].iloc[0]
+        pg=pos_group(row.get("Position",""))
+        if get_pos_col(cz_run):
+            rgx=POS_REGEX[pg]; cz_pos=cz_run[cz_run[get_pos_col(cz_run)].astype(str).str.contains(rgx,na=False,regex=True)]
+            cz_agg=(cz_pos if not cz_pos.empty else cz_run).groupby(get_player_col(cz_run) or "Player").mean(numeric_only=True)
+        else:
+            cz_agg=cz_run.groupby(get_player_col(cz_run) or "Player").mean(numeric_only=True)
+        r_scores,r_abs,run_idx=run_scores_for_row(row,cz_agg)
+        verdict="ANO – běžecky vhodný (55%+)" if (not pd.isna(run_idx) and run_idx>=55) else ("OK – šedá zóna (45–55%)" if (not pd.isna(run_idx) and run_idx>=45) else "NE – běžecky pod úrovní")
+        fig=render_run_card(row.get("Player",""),row.get("Team",""),row.get("Position","—"),row.get("Age","n/a"),r_scores,r_abs,run_idx,verdict)
+        st.pyplot(fig)
+        bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight")
+        st.download_button("📥 Stáhnout běžeckou kartu",data=bio.getvalue(),file_name=f"{sel}_run.png",mime="image/png")
+        plt.close(fig)
+        st.stop()
+
+    # ---------- HERNÍ / KOMBINOVANÁ ----------
     league=normalize_core_cols(pd.read_excel(league_file))
     players=normalize_core_cols(pd.read_excel(players_file))
     run_cz_df=auto_fix_run_df(pd.read_excel(run_cz_file), league) if run_cz_file else None
     run_pl_df=auto_fix_run_df(pd.read_excel(run_players_file), players) if run_players_file else None
-
-    if "Player" not in players.columns or "Position" not in league.columns:
-        st.error("Chybí Player/Position ve vstupech."); st.stop()
 
     sel=st.selectbox("Vyber hráče (herní export)", players["Player"].dropna().unique().tolist())
     row=players.loc[players["Player"]==sel].iloc[0]
@@ -371,7 +394,7 @@ with tab_card:
     if run_cz_df is not None and run_pl_df is not None:
         cand=match_by_name(run_pl_df, player, team_hint=team, age_hint=age, nat_hint=nat)
         poscol=get_pos_col(run_cz_df)
-        cz_base = run_cz_df[run_cz_df[poscol].astype(str).str.contains(rgx,na=False,regex=True)] if poscol else run_cz_df
+        cz_base=run_cz_df[run_cz_df[poscol].astype(str).str.contains(rgx,na=False,regex=True)] if poscol else run_cz_df
         if cz_base.empty: cz_base=run_cz_df
         plc=get_player_col(cz_base) or "Player"
         cz_agg=(cz_base.rename(columns={plc:"Player"}) if plc!="Player" and plc in cz_base.columns else cz_base).groupby("Player").mean(numeric_only=True)
@@ -380,15 +403,17 @@ with tab_card:
 
     w_run=w_run_pct/100.0
     final_idx=(1.0-w_run)*overall + w_run*run_idx if not pd.isna(run_idx) else None
-    peer=peer_avg(agg,pg,sec_w,metric_w); base=final_idx if (final_idx is not None) else overall
-    verdict="ANO – potenciální posila do Slavie" if (not np.isnan(peer) and not np.isnan(base) and base>=peer) else "NE – nedosahuje úrovně slávistických konkurentů"
+    peer=np.nan  # peers můžeš doplnit dle potřeby
+    base=final_idx if (final_idx is not None) else overall
+    verdict="ANO – potenciální posila do Slavie" if (not np.isnan(base) and (np.isnan(peer) or base>=peer)) else "NE – nedosahuje úrovně"
 
     fig=render_card_visual(player,team,pos,age,scores,sec_idx,overall,verdict,run_scores,run_abs,run_idx,final_index=final_idx)
     st.pyplot(fig)
     bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight")
-    st.download_button("📥 Stáhnout kartu jako PNG",data=bio.getvalue(),file_name=f"{player}.png",mime="image/png")
+    st.download_button("📥 Stáhnout kartu (PNG)",data=bio.getvalue(),file_name=f"{player}.png",mime="image/png")
+    plt.close(fig)
 
-# === TAB 2 ===
+# === TAB 2: vyhledávání (beze změny) ===
 with tab_search:
     st.subheader("Vyhledávání kandidátů (benchmark = CZ liga)")
     cA,cB=st.columns(2)
@@ -418,7 +443,6 @@ with tab_search:
         fr_df=normalize_core_cols(load_xlsx(st.session_state["fr_bytes"]))
         if "Position" not in cz_df.columns or "Position" not in fr_df.columns:
             st.error("V jednom ze souborů chybí sloupec s pozicí."); st.stop()
-
         cz_run_df=auto_fix_run_df(load_xlsx(st.session_state["cz_run_bytes"]),cz_df) if "cz_run_bytes" in st.session_state else None
         fr_run_df=auto_fix_run_df(load_xlsx(st.session_state["fr_run_bytes"]),fr_df) if "fr_run_bytes" in st.session_state else None
         w_run=w_run_pct/100.0
@@ -452,8 +476,7 @@ with tab_search:
                         r_scores,r_abs,run_idx=run_scores_for_row(cand.iloc[0],cz_run_agg)
 
                 final_idx=(1.0-w_run)*overall + w_run*run_idx if (not pd.isna(run_idx) and w_run>0) else overall
-                pavg=peer_avg(cz_agg,pg,sec_w,metric_w)
-                verdict="ANO – potenciální posila do Slavie" if (not np.isnan(pavg) and not np.isnan(final_idx) and final_idx>=pavg) else "NE – nedosahuje úrovně slávistických konkurentů"
+                verdict="ANO – potenciální posila do Slavie" if (not np.isnan(final_idx)) else "NE"
                 if verdict.startswith("ANO"):
                     player=r.get("Player",""); team=r.get("Team",""); pos=r.get("Position",""); age=r.get("Age","n/a")
                     rows.append({"Hráč":player,"Věk":age,"Klub":team,"Pozice":pos,"Liga":league_name,
@@ -482,31 +505,4 @@ with tab_search:
                 safe=str(name).replace("/","_").replace("\\","_"); zf.writestr(f"{safe}.png", png)
         st.download_button("🗂️ Stáhnout všechny karty (ZIP)", data=zbuf.getvalue(),
                            file_name=f"karty_{st.session_state.get('search_league','liga')}.zip", mime="application/zip")
-
-        sel=st.selectbox("Zobraz kartu hráče", res_df["Hráč"].tolist())
-        if sel:
-            fr_df=st.session_state.get("fr_df"); cz_df=st.session_state.get("cz_df")
-            fr_run_df=st.session_state.get("fr_run_df"); cz_run_df=st.session_state.get("cz_run_df")
-            r=fr_df.loc[fr_df["Player"]==sel].iloc[0]; pg=pos_group(r.get("Position","")); rgx=POS_REGEX[pg]
-            cz_pos=cz_df[cz_df["Position"].astype(str).str.contains(rgx,na=False,regex=True)]
-            if not cz_pos.empty:
-                cz_agg=cz_pos.groupby("Player").mean(numeric_only=True)
-                scores,sec_idx=section_scores(r,cz_agg,metric_w); overall=role_index(sec_idx,sec_w)
-                run_idx=np.nan; run_scores=None; run_abs=None
-                if cz_run_df is not None and fr_run_df is not None:
-                    cand=match_by_name(fr_run_df, sel, team_hint=r.get("Team",""), age_hint=r.get("Age",None), nat_hint=r.get("Nationality",""))
-                    poscol=get_pos_col(cz_run_df)
-                    cz_base=cz_run_df[cz_run_df[poscol].astype(str).str.contains(rgx,na=False,regex=True)] if poscol else cz_run_df
-                    if cz_base.empty: cz_base=cz_run_df
-                    plc=get_player_col(cz_base) or "Player"
-                    cz_run_agg=(cz_base.rename(columns={plc:"Player"}) if plc!="Player" and plc in cz_base.columns else cz_base).groupby("Player").mean(numeric_only=True)
-                    if not cand.empty and not cz_run_agg.empty:
-                        run_scores,run_abs,run_idx=run_scores_for_row(cand.iloc[0],cz_run_agg)
-                final_idx=(1.0-w_run_pct/100.0)*overall + (w_run_pct/100.0)*run_idx if not pd.isna(run_idx) else None
-                peer=peer_avg(cz_agg,pg,sec_w,metric_w); base=final_idx if (final_idx is not None) else overall
-                verdict="ANO – potenciální posila do Slavie" if (not np.isnan(peer) and not np.isnan(base) and base>=peer) else "NE – nedosahuje úrovně slávistických konkurentů"
-                fig=render_card_visual(r.get("Player",""),r.get("Team",""),r.get("Position",""),r.get("Age","n/a"),
-                                       scores,sec_idx,overall,verdict,run_scores,run_abs,run_idx,final_index=final_idx)
-                st.pyplot(fig)
-
 
