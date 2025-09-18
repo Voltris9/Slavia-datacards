@@ -509,37 +509,328 @@ with tab_search:
                                        scores,sec_idx,overall,verdict,run_scores,run_abs,run_idx,final_index)
                 st.pyplot(fig)
 
-# --- Tab 3: samostatná běžecká karta ---
-with tab_runonly:
-    st.subheader("Běžecká karta (samostatně – bez herních metrik)")
-    cL,cR=st.columns(2)
-    with cL: run_cz_bench=st.file_uploader("CZ běžecká data (xlsx) – benchmark",type=["xlsx"],key="run_cz_only")
-    with cR: run_any=st.file_uploader("Běžecká data – libovolná liga (xlsx)",type=["xlsx"],key="run_any_only")
-    if not run_cz_bench or not run_any:
-        st.info("➡️ Nahraj **oba** soubory: CZ benchmark + běžecký export ligy/klubu."); st.stop()
-    try:
-        czb=pd.read_excel(run_cz_bench); anyb=pd.read_excel(run_any)
-    except Exception as e:
-        st.error(f"Chyba při načítání běžeckých souborů: {e}"); st.stop()
-    czb=auto_fix_run_df(czb); anyb=auto_fix_run_df(anyb)
-    plcol=get_player_col(anyb) or "Player"
-    players_run=anyb[plcol].dropna().astype(str).sort_values().unique().tolist() if plcol in anyb.columns else []
-    if not players_run: st.warning("Ve zvoleném běžeckém souboru není sloupec se jménem hráče."); st.stop()
-    sel=st.selectbox("Vyber hráče (běžecký export)", players_run)
-    row=anyb.loc[anyb[plcol].astype(str)==str(sel)].iloc[0]
-    plc=get_player_col(czb) or "Player"; cz_tmp=czb.rename(columns={plc:"Player"}) if plc!="Player" and plc in czb.columns else czb
-    cz_agg=cz_tmp.groupby("Player").mean(numeric_only=True)
-    run_scores,run_abs,run_idx=compute_run_scores(row,cz_agg)
-    with st.expander("Kontrola běžeckých dat",expanded=False):
-        miss_cz=[lab for eng,lab in RUN if series_for_alias_run(cz_agg,eng) is None]
-        miss_pl=[lab for eng,lab in RUN if pd.isna(value_with_alias_run(row,eng))]
-        st.write(f"Chybějící metriky v CZ benchmarku: {', '.join(miss_cz) if miss_cz else '—'}")
-        st.write(f"Chybějící metriky u hráče: {', '.join(miss_pl) if miss_pl else '—'}")
-        present=sum([0 if pd.isna(run_scores[RUN_KEY].get(lab,np.nan)) else 1 for _,lab in RUN])
-        st.write(f"Metrik započteno do Run indexu: {present}/{len(RUN)}")
-        if present<=4: st.warning("Běžecké hodnocení je málo spolehlivé (≤ 4 metrik).")
-    fig=render_run_card_visual(str(row.get(plcol,"")),str(row.get("Team","")),row.get("Position","—") if "Position" in row.index else "—",row.get("Age","n/a"),run_scores,run_abs,run_idx)
-    st.pyplot(fig)
-    b=io.BytesIO(); fig.savefig(b,format="png",dpi=180,bbox_inches="tight")
-    st.download_button("📥 Stáhnout běžeckou kartu (PNG)",data=b.getvalue(),file_name=f"{row.get(plcol,'player')}_run.png",mime="image/png")
+# app.py — BĚŽECKÁ KARTA (benchmark = CZ) + VERDIKT PRO SLAVII
+# ------------------------------------------------------------
+import io, re, unicodedata
+from io import BytesIO
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+import streamlit as st
+
+st.set_page_config(page_title="Slavia – běžecká karta", layout="wide")
+st.title("🏃‍♂️ Běžecká karta hráče (benchmark = CZ) + verdikt pro Slavii")
+
+# =========================
+# UI helpers
+# =========================
+def color_for(v):
+    if pd.isna(v): return "lightgrey"
+    if v <= 25: return "#FF4C4C"
+    if v <= 50: return "#FF8C00"
+    if v <= 75: return "#FFD700"
+    return "#228B22"
+
+# =========================
+# Definice metrik + aliasy
+# =========================
+RUN = [
+    ("Total distance per 90", "Total distance /90"),
+    ("High-intensity runs per 90", "High-intensity runs /90"),
+    ("Sprints per 90", "Sprints /90"),
+    ("Max speed (km/h)", "Max speed (km/h)"),
+    ("Average speed (km/h)", "Average speed (km/h)"),
+    ("Accelerations per 90", "Accelerations /90"),
+    ("Decelerations per 90", "Decelerations /90"),
+    ("High-speed distance per 90", "High-speed distance /90"),
+]
+RUN_KEY = "Run"
+
+ALIASES_RUN = {
+    "Total distance per 90": [
+        "Total distance per 90","Total distance/90","Total distance /90",
+        "Distance per 90","Total distance (km) per 90","Distance P90"
+    ],
+    "High-intensity runs per 90": [
+        "High-intensity runs per 90","High intensity runs per 90",
+        "High intensity runs/90","High intensity runs /90","HIR/90","HI Count P90"
+    ],
+    "Sprints per 90": [
+        "Sprints per 90","Sprints/90","Sprints /90",
+        "Number of sprints per 90","Sprint Count P90"
+    ],
+    "Max speed (km/h)": [
+        "Max speed (km/h)","Top speed","Max velocity","Max speed","PSV-99","TOP 5 PSV-99"
+    ],
+    "Average speed (km/h)": [
+        "Average speed (km/h)","Avg speed","Average velocity","M/min P90"
+    ],
+    "Accelerations per 90": [
+        "Accelerations per 90","Accelerations/90","Accelerations /90","Accels per 90",
+        "High Acceleration Count P90","Medium Acceleration Count P90",
+        "High Acceleration Count P90 + Medium Acceleration Count P90"
+    ],
+    "Decelerations per 90": [
+        "Decelerations per 90","Decelerations/90","Decelerations /90","Decels per 90",
+        "High Deceleration Count P90","Medium Deceleration Count P90",
+        "High Deceleration Count P90 + Medium Deceleration Count P90"
+    ],
+    "High-speed distance per 90": [
+        "High-speed distance per 90","HS distance/90","HS distance /90",
+        "High speed distance per 90","HSR Distance P90"
+    ],
+}
+
+# =========================
+# Utility: normalizace názvů a tvarů dat
+# =========================
+def _normalize_run_colname(name: str) -> str:
+    if not isinstance(name, str): return name
+    s = name.strip()
+    s = re.sub(r"\s*/\s*90", "/90", s)                  # ' /90 ' -> '/90'
+    s = re.sub(r"\s+per\s+90", " per 90", s, flags=re.I)
+    s = re.sub(r"/90\b", " per 90", s)                  # '/90' -> ' per 90'
+    s = s.replace("High intensity", "High-intensity")
+    return s
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty: return df
+    df = df.copy()
+    df.columns = [_normalize_run_colname(c) for c in df.columns]
+    return df
+
+def get_pos_col(df: pd.DataFrame):
+    if df is None: return None
+    for c in ["Position","Pos","position","Role","Primary position"]:
+        if c in df.columns: return c
+    return None
+
+def get_player_col(df: pd.DataFrame):
+    if df is None: return None
+    for c in ["Player","Name","player","name","Short Name"]:
+        if c in df.columns: return c
+    return None
+
+def ensure_run_wide(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty: return df
+    if "Metric" in df.columns and "Value" in df.columns:
+        pcol = get_pos_col(df)
+        plcol = get_player_col(df) or "Player"
+        idx = [c for c in [plcol,"Team",pcol,"Age"] if (c and c in df.columns)]
+        wide = df.pivot_table(index=idx, columns="Metric", values="Value", aggfunc="mean").reset_index()
+        if plcol != "Player" and plcol in wide.columns: wide = wide.rename(columns={plcol:"Player"})
+        if pcol and pcol != "Position" and pcol in wide.columns: wide = wide.rename(columns={pcol:"Position"})
+        return wide
+    pcol = get_pos_col(df); plcol = get_player_col(df)
+    if pcol and pcol!="Position": df = df.rename(columns={pcol:"Position"})
+    if plcol and plcol!="Player": df = df.rename(columns={plcol:"Player"})
+    return df
+
+def series_for_alias_run(df: pd.DataFrame, eng_key: str):
+    if df is None or df.empty: return None
+    if eng_key in df.columns: return df[eng_key]
+    for cand in ALIASES_RUN.get(eng_key, []):
+        if cand in df.columns: return df[cand]
+    return None
+
+def value_with_alias_run(row: pd.Series, eng_key: str):
+    if eng_key in row.index: return row[eng_key]
+    for cand in ALIASES_RUN.get(eng_key, []):
+        if cand in row.index: return row[cand]
+    return np.nan
+
+def _best_col(df, names):
+    for n in names:
+        if n in df.columns: return n
+    return None
+
+def _strip_accents_lower(s: str) -> str:
+    if not isinstance(s, str): return ""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"\s+"," ",s).strip().lower()
+
+def auto_fix_run_df(run_df: pd.DataFrame, game_df: pd.DataFrame=None) -> pd.DataFrame:
+    if run_df is None or run_df.empty: return run_df
+    run_df = _normalize_columns(run_df)
+    run_df = ensure_run_wide(run_df)
+
+    # dopočty
+    if "Average speed (km/h)" not in run_df.columns and "M/min P90" in run_df.columns:
+        run_df["Average speed (km/h)"] = pd.to_numeric(run_df["M/min P90"], errors="coerce") * 0.06
+    if "Accelerations per 90" not in run_df.columns:
+        cols = [c for c in ["High Acceleration Count P90","Medium Acceleration Count P90"] if c in run_df.columns]
+        if cols:
+            s = pd.to_numeric(run_df[cols[0]], errors="coerce")
+            for c in cols[1:]: s = s.add(pd.to_numeric(run_df[c], errors="coerce"), fill_value=0)
+            run_df["Accelerations per 90"] = s
+    if "Decelerations per 90" not in run_df.columns:
+        cols = [c for c in ["High Deceleration Count P90","Medium Deceleration Count P90"] if c in run_df.columns]
+        if cols:
+            s = pd.to_numeric(run_df[cols[0]], errors="coerce")
+            for c in cols[1:]: s = s.add(pd.to_numeric(run_df[c], errors="coerce"), fill_value=0)
+            run_df["Decelerations per 90"] = s
+
+    # doplnění ident sloupců
+    id_map = {}
+    if "Player" not in run_df.columns:
+        c = _best_col(run_df, ["Name","player","name","Short Name"])
+        if c: id_map[c] = "Player"
+    if "Team" not in run_df.columns:
+        c = _best_col(run_df, ["Club","team","Team"])
+        if c: id_map[c] = "Team"
+    if id_map: run_df = run_df.rename(columns=id_map)
+
+    # doplnění Position z herních (není nutné pro run-only; necháno pro jistotu)
+    if "Position" not in run_df.columns and game_df is not None and not game_df.empty:
+        g = game_df.copy()
+        if "Player" not in g.columns:
+            pcol = _best_col(g, ["Name","player","name"])
+            if pcol: g = g.rename(columns={pcol:"Player"})
+        if "Position" in g.columns and "Player" in g.columns:
+            g2 = g[["Player","Position"]].dropna().groupby("Player",as_index=False).first()
+            run_df["_k"] = run_df["Player"].astype(str).map(_strip_accents_lower)
+            g2["_k"] = g2["Player"].astype(str).map(_strip_accents_lower)
+            run_df = run_df.merge(g2[["_k","Position"]], on="_k", how="left").drop(columns=["_k"])
+    return run_df
+
+# =========================
+# Výpočty skóre
+# =========================
+def normalize_run_metric(cz_agg: pd.DataFrame, eng_key: str, value):
+    s = series_for_alias_run(cz_agg, eng_key)
+    if s is None or pd.isna(value): return np.nan
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    v = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if s.empty or pd.isna(v): return np.nan
+    mn, mx = s.min(), s.max()
+    if mx == mn: return 50.0
+    return float(np.clip((v - mn) / (mx - mn) * 100.0, 0, 100))
+
+def compute_run_scores(player_row: pd.Series, cz_run_agg: pd.DataFrame):
+    if cz_run_agg is None or cz_run_agg.empty:
+        return {RUN_KEY:{}}, {}, np.nan
+    run_scores, run_abs = {}, {}
+    for eng, label in RUN:
+        val_abs = value_with_alias_run(player_row, eng)
+        if pd.isna(val_abs) and eng=="Average speed (km/h)" and "M/min P90" in player_row.index:
+            val_abs = pd.to_numeric(player_row["M/min P90"], errors="coerce") * 0.06
+        run_abs[label] = val_abs if not pd.isna(val_abs) else np.nan
+        run_scores[label] = normalize_run_metric(cz_run_agg, eng, val_abs)
+    vals = [v for v in run_scores.values() if not pd.isna(v)]
+    run_index = float(np.mean(vals)) if vals else np.nan
+    return {RUN_KEY: run_scores}, run_abs, run_index
+
+# =========================
+# Render karty
+# =========================
+def render_run_card(player, team, age, run_scores, run_abs, run_index, verdict):
+    fig, ax = plt.subplots(figsize=(16, 9))
+    ax.axis("off")
+    ax.text(0.02,0.94, f"{player} (věk {age})", fontsize=20, fontweight="bold", va="top")
+    ax.text(0.02,0.91, f"Klub: {team}   Pozice: —", fontsize=12, va="top")
+
+    ax.text(0.02,0.86,"Běžecká data (vs. CZ benchmark)", fontsize=15, fontweight="bold", va="top")
+    y=0.82; left=0.04; right=0.30
+    for i,(_,label) in enumerate(RUN):
+        pct = run_scores[RUN_KEY].get(label, np.nan)
+        val = run_abs.get(label, np.nan)
+        x = left if i%2==0 else right
+        c = color_for(pct)
+        ax.add_patch(Rectangle((x,y-0.02),0.23,0.04,color=c,alpha=0.85,lw=0))
+        txt_val = "n/a" if pd.isna(val) else (f"{val:.2f}" if isinstance(val,(int,float,np.number)) else str(val))
+        txt_pct = "n/a" if pd.isna(pct) else f"{int(round(pct))}%"
+        ax.text(x+0.005,y-0.002,f"{label}: {txt_val} ({txt_pct})",fontsize=10,va="center",ha="left")
+        if i%2==1: y-=0.05
+
+    ax.text(0.60,0.86,"Souhrn", fontsize=15, fontweight="bold", va="top")
+    c_run = color_for(run_index)
+    ax.add_patch(Rectangle((0.60,0.79),0.35,0.06,color=c_run,alpha=0.75,lw=0))
+    ax.text(0.615,0.81,f"Běžecký index: {'n/a' if pd.isna(run_index) else str(int(round(run_index)))+'%'}",
+            fontsize=14,va="center",ha="left")
+
+    ax.add_patch(Rectangle((0.60,0.70),0.35,0.06,color='lightgrey',alpha=0.5,lw=0))
+    ax.text(0.615,0.73,f"Verdikt: {verdict}", fontsize=13, va="center", ha="left")
+    return fig
+
+# =========================
+# Slavia peers pro verdikt
+# =========================
+SLAVIA_RUN_PEERS = [
+    "D. Douděra","O. Zmrzlý","I. Ogbu","T. Holeš",
+    "C. Zafeiris","L. Provod","M. Chytil","I. Schranz"
+]
+
+# =========================
+# UI – vstupy
+# =========================
+colA, colB = st.columns(2)
+with colA:
+    cz_run_file = st.file_uploader("CZ běžecká data (xlsx) – benchmark", type=["xlsx"], key="cz_run")
+with colB:
+    any_run_file = st.file_uploader("Běžecká data – libovolná liga (xlsx)", type=["xlsx"], key="any_run")
+
+if not cz_run_file or not any_run_file:
+    st.info("Nahraj prosím **oba** soubory: CZ benchmark + libovolná liga (běh).")
+    st.stop()
+
+czb = pd.read_excel(cz_run_file)
+anyb = pd.read_excel(any_run_file)
+
+# sjednocení + dopočty
+czb = auto_fix_run_df(czb)
+anyb = auto_fix_run_df(anyb)
+
+# výběr hráče z libovolné ligy
+pl_col = get_player_col(anyb) or "Player"
+player_names = anyb[pl_col].dropna().astype(str).unique().tolist()
+sel_player = st.selectbox("Vyber hráče (běžecký export)", sorted(player_names))
+
+# CZ agregace (benchmark) a řádek hráče
+cz_tmp = czb.rename(columns={get_player_col(czb):"Player"}) if get_player_col(czb)!="Player" else czb
+cz_agg = cz_tmp.groupby("Player").mean(numeric_only=True)
+
+row_run = anyb.loc[anyb[pl_col]==sel_player]
+if row_run.empty:
+    st.error("Hráč v běžeckých datech nenalezen.")
+    st.stop()
+row_run = row_run.iloc[0]
+
+# výpočty běžeckých
+run_scores, run_abs, run_idx = compute_run_scores(row_run, cz_agg)
+
+# průměrný Run index „peerů“ Slavie
+peer_vals=[]
+for peer in SLAVIA_RUN_PEERS:
+    if peer in cz_agg.index:
+        r_peer = cz_agg.loc[peer]
+        _, _, peer_idx = compute_run_scores(r_peer, cz_agg)
+        if not pd.isna(peer_idx): peer_vals.append(peer_idx)
+peer_avg = float(np.mean(peer_vals)) if peer_vals else np.nan
+
+if not pd.isna(peer_avg) and not pd.isna(run_idx):
+    verdict = "ANO – běžecky vhodný pro Slavii" if run_idx >= peer_avg else "NE – běžecky nestačí"
+else:
+    verdict = "— (nelze vyhodnotit, chybí data)"
+
+# kontrolní panel
+with st.expander("Kontrola běžeckých dat", expanded=False):
+    miss_cz = [lab for eng,lab in RUN if series_for_alias_run(cz_agg, eng) is None]
+    miss_pl = [lab for eng,lab in RUN if pd.isna(value_with_alias_run(row_run, eng))]
+    present = sum([0 if pd.isna(run_scores[RUN_KEY].get(lab,np.nan)) else 1 for _,lab in RUN])
+    st.write(f"Chybějící metriky v CZ benchmarku: {', '.join(miss_cz) if miss_cz else '—'}")
+    st.write(f"Chybějící metriky u hráče: {', '.join(miss_pl) if miss_pl else '—'}")
+    st.write(f"Metrik započteno do Run indexu: {present}/8")
+    if present <= 4:
+        st.warning("Běžecké hodnocení je málo spolehlivé (≤ 4 metrik).")
+
+# vykreslení karty + download
+team = row_run.get("Team","—"); age = row_run.get("Age","n/a")
+fig = render_run_card(sel_player, team, age, run_scores, run_abs, run_idx, verdict)
+st.pyplot(fig)
+
+buf = BytesIO(); fig.savefig(buf, format="png", dpi=180, bbox_inches="tight")
+st.download_button("📥 Stáhnout kartu jako PNG", data=buf.getvalue(),
+                   file_name=f"{sel_player}_run.png", mime="image/png")
