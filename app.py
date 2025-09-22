@@ -7,6 +7,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Karty – Slavia", layout="wide")
 st.title("⚽ Generátor datových karet (herní + běžecká)")
+st.set_option('deprecation.showPyplotGlobalUse', False)  # potlačí deprecated upozornění od pyplot
 
 # ---------- Utils ----------
 @st.cache_data
@@ -60,18 +61,10 @@ def ensure_run_wide(df):
     return normalize_core_cols(df)
 
 def _split_name(s):
-    # odstraní diakritiku, tečky a převede na lower
-    t = unicodedata.normalize("NFKD", str(s))
-    t = "".join(c for c in t if not unicodedata.combining(c))
-    t = t.replace(".", " ")
-    parts = [x for x in re.split(r"\s+", t) if x]
-    if not parts:
-        return "", ""
-    surname = parts[-1]
-    first = next((x for x in parts if x != surname), "")
-    initial = first[0] if first else (parts[0][0] if parts else "")
-    return initial.lower(), surname.lower()
-
+    t=_normtxt(s).replace("."," "); ps=[x for x in re.split(r"\s+",t) if x]
+    if not ps: return "",""
+    sur=ps[-1]; first=next((x for x in ps if x!=sur), "")
+    return (first[0] if first else (ps[0][0] if ps else "")), sur
 
 def _norm_team(s):
     t=_normtxt(s); t=re.sub(r"\b(fk|fc|sc|ac|cf|afc|sv|us|cd|ud|bk|sk|ks|ucl|ii|b)\b"," ",t)
@@ -670,6 +663,8 @@ with tab_search:
                                            r_scores,r_abs,run_idx,final_index=final_idx, role5=role5)
                     bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight"); plt.close(fig)
                     cards.append((str(player),bio.getvalue()))
+            # pojistka: zavře případné zapomenuté figure po dávce
+            plt.close('all')
             return pd.DataFrame(rows),cards
 
         res_df,cards=search_candidates()
@@ -687,10 +682,13 @@ with tab_search:
         zbuf=BytesIO()
         with zipfile.ZipFile(zbuf,"w",zipfile.ZIP_DEFLATED) as zf:
             for name,png in (st.session_state.get("search_cards") or []):
-                safe=str(name).replace("/","").replace("\\",""); zf.writestr(f"{safe}.png", png)
+                # bezpečnější název souboru (ASCII, ořez na 60 znaků)
+                safe = re.sub(r'[^A-Za-z0-9_\- ]+', '', str(name))[:60]
+                zf.writestr(f"{safe}.png", png)
         st.download_button("🗂 Stáhnout všechny karty (ZIP)", data=zbuf.getvalue(),
                            file_name=f"karty_{st.session_state.get('league_name','liga')}_ANO.zip", mime="application/zip")
 
         with st.expander("🖼 Online karty (všichni s verdiktem ANO)"):
             for name,png in (st.session_state.get("search_cards") or []):
                 st.image(png, caption=name, use_column_width=True)
+
