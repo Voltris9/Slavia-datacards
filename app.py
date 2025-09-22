@@ -59,10 +59,17 @@ def ensure_run_wide(df):
     return normalize_core_cols(df)
 
 def _split_name(s):
-    t=_normtxt(s).replace("."," "); ps=[x for x in re.split(r"\s+",t) if x]
-    if not ps: return "",""
-    sur=ps[-1]; first=next((x for x in ps if x!=sur), "")
-    return (first[0] if first else (ps[0][0] if ps else "")), sur
+    # odstraní diakritiku, tečky a převede na lower
+    t = unicodedata.normalize("NFKD", str(s))
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = t.replace(".", " ")
+    parts = [x for x in re.split(r"\s+", t) if x]
+    if not parts:
+        return "", ""
+    surname = parts[-1]
+    first = next((x for x in parts if x != surname), "")
+    initial = first[0] if first else (parts[0][0] if parts else "")
+    return initial.lower(), surname.lower()
 
 def _norm_team(s):
     t=_normtxt(s); t=re.sub(r"\b(fk|fc|sc|ac|cf|afc|sv|us|cd|ud|bk|sk|ks|ucl|ii|b)\b"," ",t)
