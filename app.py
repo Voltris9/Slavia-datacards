@@ -29,10 +29,6 @@ def color_for(v):
         return "#006400"   # tmavě zelená
 
 
-def _normtxt(s):
-    s=unicodedata.normalize("NFKD", str(s))
-    return re.sub(r"\s+"," ","".join(c for c in s if not unicodedata.combining(c))).strip().lower()
-
 def get_player_col(df): return _best_col(df,["Player","Name","player","name","Short Name"])
 def get_team_col(df):   return _best_col(df,["Team","Club","team","club"])
 def get_pos_col(df):    return _best_col(df,["Position","Pos","position","Role","Primary position"])
@@ -683,4 +679,3 @@ with tab_search:
         with st.expander("🖼 Online karty (všichni s verdiktem ANO)"):
             for name,png in (st.session_state.get("search_cards") or []):
                 st.image(png, caption=name, use_column_width=True)
-
