@@ -28,6 +28,7 @@ def color_for(v):
     else:             # 81–100 %
         return "#006400"   # tmavě zelená
 
+
 def _normtxt(s):
     s=unicodedata.normalize("NFKD", str(s))
     return re.sub(r"\s+"," ","".join(c for c in s if not unicodedata.combining(c))).strip().lower()
