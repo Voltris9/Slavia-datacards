@@ -14,28 +14,16 @@ def load_xlsx(b: bytes) -> pd.DataFrame:
     return pd.read_excel(BytesIO(b))
 
 def color_for(v):
-    if pd.isna(v): 
-        return "lightgrey"
-    v = float(v)
-    if v <= 20:       # 0–20 %
-        return "#FF0000"   # červená
-    elif v <= 40:     # 21–40 %
-        return "#FF8C00"   # oranžová
-    elif v <= 60:     # 41–60 %
-        return "#FFD700"   # žlutá
-    elif v <= 80:     # 61–80 %
-        return "#90EE90"   # světle zelená
-    else:             # 81–100 %
-        return "#006400"   # tmavě zelená
+    if pd.isna(v): return "lightgrey"
+    v=float(v)
+    if v<=20: return "#FF0000"
+    if v<=40: return "#FF8C00"
+    if v<=60: return "#FFD700"
+    if v<=80: return "#90EE90"
+    return "#006400"
 
-
-def _best_col(df, names):
-    return next((c for c in names if c in df.columns), None)
-
-def _normtxt(s):
-    s=unicodedata.normalize("NFKD", str(s))
-    return re.sub(r"\s+"," ","".join(c for c in s if not unicodedata.combining(c))).strip().lower()
-
+def _best_col(df, names): return next((c for c in names if c in df.columns), None)
+def _normtxt(s): return re.sub(r"\s+"," ","".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))).strip().lower()
 def get_player_col(df): return _best_col(df,["Player","Name","player","name","Short Name"])
 def get_team_col(df):   return _best_col(df,["Team","Club","team","club"])
 def get_pos_col(df):    return _best_col(df,["Position","Pos","position","Role","Primary position"])
@@ -75,13 +63,8 @@ def is_slavia(team:str) -> bool:
     t=_norm_team(team or "")
     return ("slavia" in t) and ("praha" in t or "prague" in t)
 
-# ---------- STRICT matcher (fix proti „jen shoda klubu“) ----------
+# ---------- STRICT matcher ----------
 def match_by_name(df, name, team_hint=None, age_hint=None, nat_hint=None, min_score=8, require_surname=True):
-    """
-    Přísnější párování: vždy vyžaduje shodu příjmení; skóre >= min_score (default 8).
-    Body: surname=+4, first-initial=+4, exact-team=+4 (substring team=+2), age diff 0/1/2= +3/+2/+1, nat=+2.
-    Pokud není dosaženo prahu, vrací prázdný výsledek.
-    """
     if df is None or df.empty or not name: return pd.DataFrame()
     pcol=get_player_col(df) or "Player"
     if pcol not in df.columns: return pd.DataFrame()
@@ -99,14 +82,12 @@ def match_by_name(df, name, team_hint=None, age_hint=None, nat_hint=None, min_sc
     try: age_key=int(age_hint) if age_hint is not None else None
     except: age_key=None
 
-    # 1) exact name (+ exact team)
     exact=df.loc[df["_kname"]==key_full]
     if len(exact)==1: return exact
     if len(exact)>1 and team_key:
         pick=exact.loc[exact["_kteam"]==team_key]
         if len(pick)==1: return pick
 
-    # 2) pouze stejné příjmení (žádné „jen tým“!)
     pool=df.loc[df["_ksurname"]==sn_key].copy()
     if pool.empty: return pd.DataFrame()
 
@@ -129,7 +110,7 @@ def match_by_name(df, name, team_hint=None, age_hint=None, nat_hint=None, min_sc
     if best["_score"].iloc[0] < min_score: return pd.DataFrame()
     return best
 
-# ---------- Herní bloky & scoring ----------
+# ---------- Herní bloky ----------
 DEF=[("Defensive duels per 90","Defenzivní duely /90"),("Defensive duels won, %","Úspěšnost obr. duelů %"),
      ("Interceptions per 90","Interceptions /90"),("Sliding tackles per 90","Sliding tackles /90"),
      ("Aerial duels won, %","Úspěšnost vzdušných %"),("Fouls per 90","Fauly /90")]
@@ -151,7 +132,7 @@ ALIASES={"Cross accuracy, %":["Accurate crosses, %","Cross accuracy, %"],
 
 def series_alias(df,key):
     if key in df.columns: return df[key]
-    for c in ALIASES.get(key,[]):
+    for c in ALIASES.get(key,[]): 
         if c in df.columns: return df[c]
     if key=="Cross accuracy, %" and "Accurate crosses, %" in df.columns: return df["Accurate crosses, %"]
     return None
@@ -192,7 +173,7 @@ def role_index(sec_idx,weights):
             acc+=v*w; tot+=w
     return float(acc/tot) if tot>0 else np.nan
 
-# ---------- Herní skupiny (pro CZ herní benchmark) ----------
+# ---------- Pozice / Role ----------
 POS_REGEX={"CB/DF":r"(CB|DF)","RB":r"(RB)","LB":r"(LB)","WB/RWB/LWB":r"(WB|RWB|LWB)",
            "DM":r"(DM)","CM":r"(CM)","AM":r"(AM)","RW":r"(RW)","LW":r"(LW)","CF/ST":r"(CF|ST|FW)"}
 def pos_group(p):
@@ -204,7 +185,6 @@ def pos_group(p):
     if any(x in P for x in ["CF","ST","FW"]):return "CF/ST"
     return "CM"
 
-# ---------- Role5 (kanonické role pro běh: CB/RB/CM/RW/CF) ----------
 WYS_TO_ROLE = {
     "RCB":"CB","LCB":"CB","RCB3":"CB","LCB3":"CB","CB":"CB",
     "RB":"RB","RB5":"RB","LB":"RB","LB5":"RB","RWB":"RB","LWB":"RB","WB":"RB",
@@ -212,13 +192,11 @@ WYS_TO_ROLE = {
     "RAMF":"RW","LAMF":"RW","RW":"RW","LW":"RW","AMFL":"RW","AMFR":"RW","LWF":"RW","RWF":"RW","W":"RW","WINGER":"RW",
     "CF":"CF","ST":"CF","FW":"CF","FORWARD":"CF","STRIKER":"CF",
 }
-ROLE_PATTERNS = [
-    ("CB",  r"(CB|CENTRE\s*BACK|CENTER\s*BACK|CENTRAL\s*DEF(ENDER)?|DEF(ENDER)?\b(?!.*MID))"),
-    ("RB",  r"(RB|LB|RWB|LWB|WB|FULL\s*BACK|WING\s*BACK)"),
-    ("CM",  r"(DMF|CMF|AMF|DM|CM|AM|MIDFIELDER|MID)"),
-    ("RW",  r"(RW|LW|WINGER|W(?!B)\b|RIGHT\s*WING|LEFT\s*WING)"),
-    ("CF",  r"(CF|ST|FW|FORWARD|STRIKER|CENTRE\s*FORWARD|CENTER\s*FORWARD)"),
-]
+ROLE_PATTERNS=[("CB",r"(CB|CENTRE\s*BACK|CENTER\s*BACK|CENTRAL\s*DEF(ENDER)?|DEF(ENDER)?\b(?!.*MID))"),
+               ("RB",r"(RB|LB|RWB|LWB|WB|FULL\s*BACK|WING\s*BACK)"),
+               ("CM",r"(DMF|CMF|AMF|DM|CM|AM|MIDFIELDER|MID)"),
+               ("RW",r"(RW|LW|WINGER|W(?!B)\b|RIGHT\s*WING|LEFT\s*WING)"),
+               ("CF",r"(CF|ST|FW|FORWARD|STRIKER|CENTRE\s*FORWARD|CENTER\s*FORWARD)")]
 
 def _primary_wyscout_tag(pos_text:str) -> str:
     if not pos_text: return ""
@@ -232,53 +210,37 @@ def role5_from_pos_text(pos_text:str) -> str:
     for k in WYS_TO_ROLE:
         if k in U: return WYS_TO_ROLE[k]
     for role,pat in ROLE_PATTERNS:
-        if re.search(pat, U, flags=re.IGNORECASE):
-            return role
+        if re.search(pat, U, flags=re.IGNORECASE): return role
     return ""
 
 def ensure_role5_column(df):
     if df is None or df.empty: return df
-    if "Role5" not in df.columns:
-        df["Role5"]=np.nan
+    if "Role5" not in df.columns: df["Role5"]=np.nan
     if "Position" in df.columns:
         mask = df["Role5"].isna() | (df["Role5"].astype(str).str.strip()=="")
         df.loc[mask, "Role5"] = df.loc[mask, "Position"].astype(str).map(role5_from_pos_text)
     return df
 
 def _role5_or_none(x):
-    """Bezpečné přečtení Role5 (bez NaN/'' → None)."""
     if x is None: return None
     if isinstance(x,float) and np.isnan(x): return None
     s=str(x).strip().upper()
     return s if s else None
 
 def _attach_role5_from_game(run_df, game_df):
-    """
-    Připíše do běžečných dat Role5 z herních dat (klíč = první iniciála + příjmení).
-    Kryje 'L. Haraslín' vs 'Lukáš Haraslín'.
-    """
     if run_df is None or run_df.empty: return run_df
     run_df = ensure_role5_column(run_df)
     if game_df is None or game_df.empty: return ensure_role5_column(run_df)
     g = normalize_core_cols(game_df.copy())
     if "Player" not in g.columns or "Position" not in g.columns: return ensure_role5_column(run_df)
 
-    def _split_name_for_key(s):
-        t = _normtxt(s).replace(".", " ")
-        parts = [x for x in re.split(r"\s+", t) if x]
-        if not parts: return "", ""
-        sur = parts[-1]
-        first = next((x for x in parts if x != sur), "")
-        fi = first[0] if first else (parts[0][0] if parts else "")
-        return fi, sur
-
     tmp = g[["Player","Position"]].dropna().copy()
     tmp["Role5"] = tmp["Position"].astype(str).map(role5_from_pos_text)
-    fi, sur = zip(*tmp["Player"].map(_split_name_for_key))
+    fi, sur = zip(*tmp["Player"].map(_split_name))
     tmp["_k"] = pd.Series(fi, index=tmp.index) + "|" + pd.Series(sur, index=tmp.index)
     tmp = tmp.dropna(subset=["Role5", "_k"]).groupby("_k", as_index=False).agg({"Role5":"first"})
 
-    fi2, sur2 = zip(*run_df["Player"].astype(str).map(_split_name_for_key))
+    fi2, sur2 = zip(*run_df["Player"].astype(str).map(_split_name))
     run_df["_k"] = pd.Series(fi2, index=run_df.index) + "|" + pd.Series(sur2, index=run_df.index)
 
     out = run_df.merge(tmp[["_k","Role5"]], on="_k", how="left", suffixes=("","_g"))
@@ -344,7 +306,6 @@ def _post_run(df):
     return df
 
 def auto_fix_run_df(run_df, game_df):
-    """Normalizace běžečných dat + Role5 (z herních; fallback z vlastního Position/heuristik)."""
     if run_df is None or run_df.empty: return run_df
     id_map={}
     if "Player" not in run_df.columns:   c=_best_col(run_df,["Name","player","name","Short Name"]);  id_map.update({c:"Player"} if c else {})
@@ -452,12 +413,10 @@ with st.sidebar.expander("Váhy metrik v sekcích (volitelné)",False):
         tmp={lab:st.slider(f"– {lab}",0,100,10,1,key=f"{key}_{lab}") for _,lab in lst}
         s=sum(tmp.values()) or 1; metric_w[key]={lab:w/s for lab,w in tmp.items()} if s else None
 
-# ---------- Pomocné: výpočet indexů + Slavia prahy ----------
+# ---------- Pomocné výpočty ----------
 def compute_overall_and_run(row, league_agg, run_cz_df, run_df_for_row, team_hint, age_hint, nat_hint, pos_text):
-    # herní
     scores,sec_idx=section_scores(row,league_agg,metric_w)
     overall=role_index(sec_idx,sec_w)
-    # běh (role-safe)
     role5=_role5_or_none(role5_from_pos_text(pos_text))
     run_scores=run_abs=None; run_idx=np.nan
     if (run_cz_df is not None) and (run_df_for_row is not None) and role5:
@@ -473,7 +432,6 @@ def final_from_overall_and_run(overall, run_idx, w_run):
     return (1.0-w_run)*overall + w_run*run_idx if not pd.isna(run_idx) else overall
 
 def compute_slavia_role_thresholds(cz_game_df, cz_run_df, w_run, how="Medián"):
-    """Vrátí dict role5 -> prah (medián/průměr) final indexu hráčů Slavie na dané roli."""
     thr={}
     if cz_game_df is None or cz_game_df.empty: return thr
     g=normalize_core_cols(cz_game_df.copy())
@@ -517,7 +475,7 @@ def compute_slavia_role_thresholds(cz_game_df, cz_run_df, w_run, how="Medián"):
 # ---------- Tabs ----------
 tab_card, tab_search = st.tabs(["Karta hráče (herní + běžecká)", "Vyhledávání hráčů"])
 
-# === TAB 1: herní / kombinovaná / jen běžecká ===
+# === TAB 1 ===
 with tab_card:
     c1,c2=st.columns(2)
     with c1:
@@ -534,7 +492,7 @@ with tab_card:
         st.info("➡ Nahraj buď (a) CZ herní + hráčský herní export, nebo (b) CZ běžecký benchmark + běžecký export.")
         st.stop()
 
-    # ---------- JEN BĚŽECKÁ ----------
+    # JEN BĚŽECKÁ
     if (not have_game) and have_run:
         cz_run=auto_fix_run_df(pd.read_excel(run_cz_file), None)
         any_run=auto_fix_run_df(pd.read_excel(run_players_file), None)
@@ -542,10 +500,7 @@ with tab_card:
         sel=st.selectbox("Vyber hráče (běžecký export)", any_run[pcol].dropna().unique().tolist())
         row=any_run.loc[any_run[pcol]==sel].iloc[0]
         role5=_role5_or_none(row.get("Role5","") or role5_from_pos_text(row.get("Position","")))
-        if role5:
-            cz_base = cz_run[cz_run.get("Role5","").astype(str).str.upper()==role5]
-        else:
-            cz_base = pd.DataFrame()
+        cz_base = cz_run[cz_run.get("Role5","").astype(str).str.upper()==role5] if role5 else pd.DataFrame()
         if cz_base is None or cz_base.empty:
             st.warning("Chybí CZ benchmark pro danou roli (běžecká). Běžecký index nebude vypočten.")
             r_scores,r_abs,run_idx={RUN_KEY:{}},{},np.nan
@@ -558,13 +513,12 @@ with tab_card:
         st.pyplot(fig); bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight"); st.download_button("📥 Stáhnout běžeckou kartu",data=bio.getvalue(),file_name=f"{sel}_run.png",mime="image/png"); plt.close(fig)
         st.stop()
 
-    # ---------- HERNÍ / KOMBINOVANÁ ----------
+    # HERNÍ / KOMBINOVANÁ
     league=normalize_core_cols(pd.read_excel(league_file))
     players=normalize_core_cols(pd.read_excel(players_file))
     run_cz_df=auto_fix_run_df(pd.read_excel(run_cz_file), league) if run_cz_file else None
     run_pl_df=auto_fix_run_df(pd.read_excel(run_players_file), players) if run_players_file else None
 
-    # prahy Slavie
     w_run=w_run_pct/100.0
     slavia_thr=compute_slavia_role_thresholds(league, run_cz_df, w_run, how=th_agg)
 
@@ -587,7 +541,7 @@ with tab_card:
     fig=render_card_visual(player,team,pos,age,scores,sec_idx,overall,verdict,run_scores,run_abs,run_idx,final_index=final_idx, role5=role5)
     st.pyplot(fig); bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight"); st.download_button("📥 Stáhnout kartu (PNG)",data=bio.getvalue(),file_name=f"{player}.png",mime="image/png"); plt.close(fig)
 
-# === TAB 2: vyhledávání (Slavia prahy + online karty ANO) ===
+# === TAB 2 ===
 with tab_search:
     st.subheader("Vyhledávání kandidátů (benchmark = CZ liga, prahy = Slavia)")
     cA,cB=st.columns(2)
@@ -667,7 +621,6 @@ with tab_search:
         res_df,cards=search_candidates()
         st.session_state.update(search_results=res_df,search_cards=cards,fr_df=fr_df,cz_df=cz_df,fr_run_df=fr_run_df,cz_run_df=cz_run_df,slavia_thr=slavia_thr,w_run=w_run,league_name=league_name)
 
-    # Výstup + online karty
     res_df=st.session_state.get("search_results")
     if res_df is None or res_df.empty:
         st.info("Zatím žádné výsledky – nahraj soubory a klikni na Spustit vyhledávání.")
@@ -686,3 +639,4 @@ with tab_search:
         with st.expander("🖼 Online karty (všichni s verdiktem ANO)"):
             for name,png in (st.session_state.get("search_cards") or []):
                 st.image(png, caption=name, use_column_width=True)
+
