@@ -14,19 +14,8 @@ def load_xlsx(b: bytes) -> pd.DataFrame:
     return pd.read_excel(BytesIO(b))
 
 def color_for(v):
-    if pd.isna(v): 
-        return "lightgrey"
-    v = float(v)
-    if v <= 20:       # 0–20 %
-        return "#FF0000"   # červená
-    elif v <= 40:     # 21–40 %
-        return "#FF8C00"   # oranžová
-    elif v <= 60:     # 41–60 %
-        return "#FFD700"   # žlutá
-    elif v <= 80:     # 61–80 %
-        return "#90EE90"   # světle zelená
-    else:             # 81–100 %
-        return "#006400"   # tmavě zelená
+    if pd.isna(v): return "lightgrey"
+    return "#FF4C4C" if v<=25 else "#FF8C00" if v<=50 else "#FFD700" if v<=75 else "#228B22"
 
 def _best_col(df, names):
     return next((c for c in names if c in df.columns), None)
@@ -59,17 +48,10 @@ def ensure_run_wide(df):
     return normalize_core_cols(df)
 
 def _split_name(s):
-    # odstraní diakritiku, tečky a převede na lower
-    t = unicodedata.normalize("NFKD", str(s))
-    t = "".join(c for c in t if not unicodedata.combining(c))
-    t = t.replace(".", " ")
-    parts = [x for x in re.split(r"\s+", t) if x]
-    if not parts:
-        return "", ""
-    surname = parts[-1]
-    first = next((x for x in parts if x != surname), "")
-    initial = first[0] if first else (parts[0][0] if parts else "")
-    return initial.lower(), surname.lower()
+    t=_normtxt(s).replace("."," "); ps=[x for x in re.split(r"\s+",t) if x]
+    if not ps: return "",""
+    sur=ps[-1]; first=next((x for x in ps if x!=sur), "")
+    return (first[0] if first else (ps[0][0] if ps else "")), sur
 
 def _norm_team(s):
     t=_normtxt(s); t=re.sub(r"\b(fk|fc|sc|ac|cf|afc|sv|us|cd|ud|bk|sk|ks|ucl|ii|b)\b"," ",t)
