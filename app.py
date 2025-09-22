@@ -14,20 +14,15 @@ def load_xlsx(b: bytes) -> pd.DataFrame:
     return pd.read_excel(BytesIO(b))
 
 def color_for(v):
-    if pd.isna(v): 
-        return "lightgrey"
-    v = float(v)
-    if v <= 20:       # 0–20 %
-        return "#FF0000"   # červená
-    elif v <= 40:     # 21–40 %
-        return "#FF8C00"   # oranžová
-    elif v <= 60:     # 41–60 %
-        return "#FFD700"   # žlutá
-    elif v <= 80:     # 61–80 %
-        return "#90EE90"   # světle zelená
-    else:             # 81–100 %
-        return "#006400"   # tmavě zelená
+    if pd.isna(v): return "lightgrey"
+    return "#FF4C4C" if v<=25 else "#FF8C00" if v<=50 else "#FFD700" if v<=75 else "#228B22"
 
+def _best_col(df, names):
+    return next((c for c in names if c in df.columns), None)
+
+def _normtxt(s):
+    s=unicodedata.normalize("NFKD", str(s))
+    return re.sub(r"\s+"," ","".join(c for c in s if not unicodedata.combining(c))).strip().lower()
 
 def get_player_col(df): return _best_col(df,["Player","Name","player","name","Short Name"])
 def get_team_col(df):   return _best_col(df,["Team","Club","team","club"])
