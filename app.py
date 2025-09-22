@@ -7,7 +7,6 @@ import streamlit as st
 
 st.set_page_config(page_title="Karty – Slavia", layout="wide")
 st.title("⚽ Generátor datových karet (herní + běžecká)")
-st.set_option('deprecation.showPyplotGlobalUse', False)  # potlačí deprecated upozornění od pyplot
 
 # ---------- Utils ----------
 @st.cache_data
@@ -663,8 +662,6 @@ with tab_search:
                                            r_scores,r_abs,run_idx,final_index=final_idx, role5=role5)
                     bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight"); plt.close(fig)
                     cards.append((str(player),bio.getvalue()))
-            # pojistka: zavře případné zapomenuté figure po dávce
-            plt.close('all')
             return pd.DataFrame(rows),cards
 
         res_df,cards=search_candidates()
@@ -682,13 +679,10 @@ with tab_search:
         zbuf=BytesIO()
         with zipfile.ZipFile(zbuf,"w",zipfile.ZIP_DEFLATED) as zf:
             for name,png in (st.session_state.get("search_cards") or []):
-                # bezpečnější název souboru (ASCII, ořez na 60 znaků)
-                safe = re.sub(r'[^A-Za-z0-9_\- ]+', '', str(name))[:60]
-                zf.writestr(f"{safe}.png", png)
+                safe=str(name).replace("/","").replace("\\",""); zf.writestr(f"{safe}.png", png)
         st.download_button("🗂 Stáhnout všechny karty (ZIP)", data=zbuf.getvalue(),
                            file_name=f"karty_{st.session_state.get('league_name','liga')}_ANO.zip", mime="application/zip")
 
         with st.expander("🖼 Online karty (všichni s verdiktem ANO)"):
             for name,png in (st.session_state.get("search_cards") or []):
                 st.image(png, caption=name, use_column_width=True)
-
