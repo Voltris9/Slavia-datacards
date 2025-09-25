@@ -300,6 +300,13 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     def phrase(map_, p):
         return map_.get(bucket(p), map_.get("bez_dat","bez dat"))
 
+    def fmt_percentil(p):
+        return "bez dat" if pd.isna(p) else f"{p:.0f}. percentil"
+
+    def fmt_num(v):
+        v = safe_float(v)
+        return "bez dat" if pd.isna(v) else f"{v:.2f}"
+
     P = {
         "drib": pct_rank_safe("Successful dribbles, %"),
         "cross": pct_rank_safe("Accurate crosses, %"),
@@ -409,40 +416,30 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         f"Archetyp: **{archetype}**. {minutes_info} {ref_info}"
     )
 
+    # Útočná fáze
     p1 = []
-    p1.append(f"Driblink: {phrase(DRIB_TXT, P['drib'])} (" + (f"{P['drib']:.0f}. percentil" if not pd.isna(P['drib']) else "bez dat") + ").")
-    p1.append(f"Centrování: {phrase(CROSS_TXT, P['cross'])} (" + (f"{P['cross']:.0f}. percentil" if not pd.isna(P['cross']) else "bez dat") + ").")
+    p1.append(f"Driblink: {phrase(DRIB_TXT, P['drib'])} ({fmt_percentil(P['drib'])}).")
+    p1.append(f"Centrování: {phrase(CROSS_TXT, P['cross'])} ({fmt_percentil(P['cross'])}).")
     p1.append(
-        "Zakončení/produkce: " +
-        phrase(FINISH_TXT, max(P.get('g90',np.nan), P.get('shots90',np.nan))) +
-        f" (góly/90: {(safe_float(player_row.get('Goals per 90', np.nan)) or 0):.2f}; "
-        f"střely/90: {(safe_float(player_row.get('Shots per 90', np.nan)) or 0):.2f})."
+        f"Zakončení/produkce: {phrase(FINISH_TXT, max(P.get('g90', np.nan), P.get('shots90', np.nan)))} "
+        f"(góly/90: {fmt_num(player_row.get('Goals per 90', np.nan))}; "
+        f"střely/90: {fmt_num(player_row.get('Shots per 90', np.nan))})."
     )
     paragraphs.append("**Útočná fáze.** " + " ".join(p1))
 
+    # Kreativita a poslední třetina
     p2 = []
-    p2.append(
-        "Kreativita: " +
-        phrase(CREA_TXT, P['keyp90']) +
-        f" (key passes/90: {(safe_float(player_row.get('Key passes per 90', np.nan)) or 0):.2f})."
-    )
-    p2.append(
-        "Přítomnost v boxu: " +
-        ("často" if bucket(P['touch90']) in ['nadprum','elite'] else "spíše sporadicky") +
-        " (" + (f"{P['touch90']:.0f}. percentil" if not pd.isna(P['touch90']) else "bez dat") + ")."
-    )
-    p2.append(
-        "Asistence: " +
-        ("stabilní" if bucket(P['a90']) in ['nadprum','elite'] else "kolísavé") +
-        f" (asistence/90: {(safe_float(player_row.get('Assists per 90', np.nan)) or 0):.2f})."
-    )
+    p2.append(f"Kreativita: {phrase(CREA_TXT, P['keyp90'])} (key passes/90: {fmt_num(player_row.get('Key passes per 90', np.nan))}).")
+    p2.append(f"Přítomnost v boxu: {'často' if bucket(P['touch90']) in ['nadprum','elite'] else 'spíše sporadicky'} ({fmt_percentil(P['touch90'])}).")
+    p2.append(f"Asistence: {'stabilní' if bucket(P['a90']) in ['nadprum','elite'] else 'kolísavé'} (asistence/90: {fmt_num(player_row.get('Assists per 90', np.nan))}).")
     paragraphs.append("**Kreativita a poslední třetina.** " + " ".join(p2))
 
+    # Defenziva a souboje
     p3 = []
-    p3.append("Ofenzivní duely: " + phrase(DUELS_TXT, P['offd']) + ".")
-    p3.append("Defenzivní duely: " + phrase(DUELS_TXT, P['defd']) + ".")
-    p3.append("Vzduch: " + phrase(AERIAL_TXT, P['aerial']) + ".")
-    p3.append("Přihrávková čistota: " + phrase(PASSACC_TXT, P['passacc']) + ".")
+    p3.append(f"Ofenzivní duely: {phrase(DUELS_TXT, P['offd'])}.")
+    p3.append(f"Defenzivní duely: {phrase(DUELS_TXT, P['defd'])}.")
+    p3.append(f"Vzduch: {phrase(AERIAL_TXT, P['aerial'])}.")
+    p3.append(f"Přihrávková čistota: {phrase(PASSACC_TXT, P['passacc'])}.")
     paragraphs.append("**Defenziva a souboje.** " + " ".join(p3))
 
     # Taktický fit
@@ -499,7 +496,7 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     # Individuální plán
     kpi = [
         "Finále v boxu – automatizovat vzorce (cutback, první dotek, second post).",
-        "Tempo poslední přihrávky – volba dřív, kontrola váhy přihrávky do náběhu.",
+        "Tempo poslední přihrávky – volba dřív, kontrola váhy přihrávek do náběhu.",
         "Defenzivní 1v1 – úhly zavírání, práce tělem bez faulu.",
     ]
     paragraphs.append("**Plán 8–12 týdnů.** " + " ".join([f"{i+1}) {t}" for i,t in enumerate(kpi)]))
@@ -518,7 +515,7 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
 
 ".join(paragraphs))
 
-    # -------------------- Export reportu (DOCX) --------------------
+    # -------------------- Export reportu (DOCX) -------------------- --------------------
     st.subheader("Export reportu (DOCX)")
     if HAVE_DOCX:
         # Re-render obrázků pro export, aby byly živé instance
