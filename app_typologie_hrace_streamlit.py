@@ -18,6 +18,7 @@ except Exception:
 # -------------------- ZÁKLADNÍ NASTAVENÍ --------------------
 st.set_page_config(page_title="Typologie hráče – Scouting report", layout="wide")
 st.title("⚽ Typologie hráče – generátor scouting reportu (CZ)")
+st.caption("Build: v2.3 – detailní report s percentily, archetypy a taktickým fitem")
 
 # SideBar – globální volby
 with st.sidebar:
@@ -26,6 +27,9 @@ with st.sidebar:
     high_band = st.slider("Hranice 'nadprůměr' (HIGH)", 105, 180, 130, 1)
     min_minutes = st.number_input("Minimální minuty pro referenční vzorek", min_value=0, value=300, step=30)
     show_percentiles = st.checkbox("Zobrazit percentily (vs. pozice)", value=True)
+    if st.button("🧹 Clear cache"):
+        st.cache_data.clear()
+        st.experimental_rerun()
     st.markdown("---")
     st.caption("Tip: Pokud má hráč více řádků (více sezón/zápasů), bere se **první** shoda v datasetu.")
 
@@ -590,6 +594,5 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         st.warning("DOCX export není dostupný – chybí python-docx. Přidej ho do requirements.txt a redeployni appku.")
 else:
     st.info("Nahraj ligový soubor a vyber/nahraj hráče – pak ti vygeneruju vizuály a stažitelný report.")
-
 
 
