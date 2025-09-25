@@ -417,6 +417,11 @@ def _topk(d, k=3, reverse=True):
     items.sort(key=lambda x: x[1], reverse=reverse)
     return items[:k]
 
+def _fmt_metric_list(pairs):
+    """pairs = [(label, value), ...] -> 'Label 75%, Label 62%, ...' nebo 'n/a'"""
+    vals = [f"{k} {int(round(v))}%" for k, v in pairs if not pd.isna(v)]
+    return ", ".join(vals) if vals else "n/a"
+
 def _collect_strengths_weaknesses(sec_scores, run_scores):
     strengths=[]; weaknesses=[]
     for _, lst, key in blocks:
@@ -631,8 +636,9 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
             base_lab = lab.replace(" (běh)", "")
             md.append(f"- {lab}: {int(round(v))}% ({_band(v)}) – {_explain_metric(base_lab)}")
 
-    md.append("\n**TOP metriky (herní):** " + (", ".join([f\"{k} {int(round(v))}%\" for k, v in top_game if not pd.isna(v)]) or "n/a"))
-    md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f\"{k} {int(round(v))}%\" for k, v in low_game if not pd.isna(v)]) or "n/a"))
+    md.append("\n**TOP metriky (herní):** " + _fmt_metric_list(top_game))
+    md.append("**NEJSLABŠÍ metriky (herní):** " + _fmt_metric_list(low_game))
+
 
     # doporučení + red flags
     md.append("\n**Doporučení pro využití:**\n- " + "\n- ".join(tips))
