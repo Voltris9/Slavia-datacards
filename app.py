@@ -539,7 +539,7 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
         for lab,v in weaknesses: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
 
     md.append("\n**TOP metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in top_game if not pd.isna(v)]) or "n/a"))
-md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in low_game if not pd.isna(v)]) or "n/a"))
+    md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in low_game if not pd.isna(v)]) or "n/a"))
 
     tips=[]
     if role5 in ["RW","LW","RB"] and (not pd.isna(run_idx) and run_idx>=55): tips.append("vysoký pressing, využívej náběhy za obranu")
