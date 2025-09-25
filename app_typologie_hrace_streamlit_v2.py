@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Streamlit app: Typologie hráče – automatický scouting report (CZ)
-# Build: v3.0 – narativní typologie, přísné doporučení, percentily, DOCX export
+# Build: v3.2 – dlouhý narativ (více odstavců), přísné doporučení, percentily, DOCX export
 
 import io
 import re
@@ -22,13 +22,11 @@ except Exception:
 # -------------------- ZÁKLADNÍ NASTAVENÍ --------------------
 st.set_page_config(page_title="Typologie hráče – Scouting report", layout="wide")
 st.title("⚽ Typologie hráče – generátor scouting reportu (CZ)")
-st.caption("Build: v3.0 – narativní typologie, přísné doporučení")
+st.caption("Build: v3.2 – dlouhý narativ, přísné doporučení")
 
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Nastavení")
-    low_band = st.slider("Hranice 'podprůměr' (LOW)", 50, 95, 70, 1)
-    high_band = st.slider("Hranice 'nadprůměr' (HIGH)", 105, 180, 130, 1)
     min_minutes = st.number_input("Minimální minuty pro referenční vzorek", min_value=0, value=300, step=30)
     show_percentiles = st.checkbox("Zobrazit percentily (vs. pozice)", value=True)
     tone = st.selectbox("Tón doporučení", ["Přísný", "Neutrální"], index=0)
@@ -222,10 +220,10 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         df_prc = pd.DataFrame(rows)
         st.dataframe(df_prc, use_container_width=True)
 
-    # -------------------- NARATIVNÍ TYPOLOGIE --------------------
-    st.subheader("Scouting report – souvislý text (narativní typologie)")
+    # -------------------- DLOUHÝ NARATIV – TYPOLOGIE --------------------
+    st.subheader("Scouting report – souvislý text (narativ)")
 
-    # percentily pro rozhodování
+    # helpery
     def pct_rank_safe(col_name):
         if col_name not in league_pos.columns:
             return np.nan
@@ -241,10 +239,11 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     def fmt_percentil(p):
         return "bez dat" if pd.isna(p) else f"{p:.0f}. percentil"
 
-    def fmt_num(v):
+    def fmt_num(v, nd=2):
         v2 = safe_float(v)
-        return "bez dat" if pd.isna(v2) else f"{v2:.2f}"
+        return "bez dat" if pd.isna(v2) else f"{v2:.{nd}f}"
 
+    # percentily pro logiku
     P = {
         "drib":    pct_rank_safe("Successful dribbles, %"),
         "cross":   pct_rank_safe("Accurate crosses, %"),
@@ -259,143 +258,138 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         "a90":     pct_rank_safe("Assists per 90"),
     }
 
-    # Archetyp
-    def archetype_sentence(pos, P):
-        tags = []
-        sent = ""
-        if pos in ["CB"]:
-            if bucket(P["aerial"]) in ["elite","nadprum"] and bucket(P["defd"]) in ["nadprum","elite"]:
-                tags.append("silový stoper")
-            if bucket(P["passacc"]) in ["nadprum","elite"]:
-                tags.append("klid v první rozehrávce")
-            if bucket(P["aerial"]) in ["nadprum","elite"] and bucket(P["passacc"]) not in ["nadprum","elite"]:
-                sent = "Profilově jde o silového stopera do struktur s trojicí vzadu; ve vzduchu přináší stabilitu, na míči hraje jednoduše."
-            elif bucket(P["aerial"]) in ["nadprum","elite"] and bucket(P["passacc"]) in ["nadprum","elite"]:
-                sent = "Stoper s dominancí ve vzduchu a slušnou první rozehrávkou; zvládne dvojici i trojici."
-            else:
-                sent = "Stoper orientovaný na obranu prostoru a hlavičkové situace; rozehrávka spíše bezpečná."
-        elif pos in ["RB","LB","RWB","LWB"]:
+    # odhad archetypu + fyz. popis (z dat vyvodíme pár vět)
+    speed_hint = "rychlý v akceleraci a nábězích" if bucket(P["drib"]) in ["nadprum","elite"] or bucket(P["touch90"]) in ["nadprum","elite"] else "rychlostně průměrný"
+    workrate_hint = "pracovitý v presinku" if bucket(P["defd"]) in ["nadprum","elite"] else "pracuje systémově, bez extra agresivity"
+
+    def archetype_text(pos, P):
+        if pos == "CB":
+            core = "silový stoper" if bucket(P["aerial"]) in ["nadprum","elite"] else "poziční stoper"
+            ball = "slušná první rozehrávka" if bucket(P["passacc"]) in ["nadprum","elite"] else "jednoduchá rozehrávka"
+            trio = "vhodný i do trojice stoperů" if bucket(P["aerial"]) in ["nadprum","elite"] else "vhodnější do kompaktní dvojice"
+            return core + ", " + ball + ", " + trio
+        if pos in ["RB","LB","RWB","LWB"]:
             if bucket(P["cross"]) in ["nadprum","elite"]:
-                tags.append("ofenzivní bek/wingback – doručování")
-            if bucket(P["defd"]) in ["nadprum","elite"]:
-                tags.append("spolehlivý 1v1 v defenzivě")
-            sent = "Bek vhodný do přechodové hry a vysokého postavení; doručování z kraje nad průměrem." \
-                   if bucket(P["cross"]) in ["nadprum","elite"] else \
-                   "Bek se zaměřením na defenzivní stabilitu; 1v1 lepší než tvorba z hloubky."
-        elif pos in ["LW","RW","LWF","RWF"]:
+                return "ofenzivní bek/wingback s doručováním z kraje"
+            return "bek orientovaný na defenzivní stabilitu a krytí prostoru"
+        if pos in ["LW","RW","LWF","RWF"]:
             if bucket(P["drib"]) in ["nadprum","elite"] and bucket(P["keyp90"]) in ["nadprum","elite"]:
-                tags.append("křídlo-playmaker")
-                sent = "Křídlo s přechodem 1v1 a poslední přihrávkou; hrozí z halfspace."
-            elif bucket(P["g90"]) in ["nadprum","elite"] and bucket(P["touch90"]) in ["nadprum","elite"]:
-                tags.append("křídlo-finisher")
-                sent = "Přímočaré křídlo s náběhy do boxu a zakončením na zadní tyči."
-            else:
-                tags.append("křídlo-transition")
-                sent = "Křídlo do otevřeného prostoru; v bloku je výstup proměnlivý."
-        elif pos in ["CF","ST","CF9"]:
+                return "křídlo-playmaker do 1v1 a poslední přihrávky"
+            if bucket(P["g90"]) in ["nadprum","elite"] and bucket(P["touch90"]) in ["nadprum","elite"]:
+                return "přímočaré křídlo/AMF s náběhy do boxu"
+            return "křídlo do přechodu a otevřeného prostoru"
+        if pos in ["CF","ST","CF9"]:
+            if bucket(P["g90"]) in ["nadprum","elite"]:
+                return "boxový zakončovatel"
             if bucket(P["aerial"]) in ["nadprum","elite"]:
-                tags.append("9 – target")
-                sent = "Útočník pro hru do těla a vysoké míče; ukotví kombinaci."
-            elif bucket(P["g90"]) in ["nadprum","elite"]:
-                tags.append("9 – finisher")
-                sent = "Boxový zakončovatel s dobrým načasováním v šestnáctce."
-            else:
-                tags.append("9 – spojka")
-                sent = "Útočník pro spojení hry; finální produkce spíše průměr."
-        else:
-            tags.append("univerzální profil")
-            sent = "Univerzální středový hráč; přidaná hodnota dle herního plánu."
-        return ", ".join(tags), sent
+                return "target útočník do hry do těla"
+            return "spojka pro kombinaci"
+        return "univerzální profil"
 
-    tags, arche = archetype_sentence(primary_pos, P)
+    arche = archetype_text(primary_pos, P)
 
-    uvod = (
-        jmeno + " (" + (str(int(vek)) if not pd.isna(vek) else "věk ?") + ", " + klub + ") je typologicky " +
-        (tags if tags else "univerzální profil") + ". " + arche +
-        " V této sezóně odehrál " + (str(int(minuty)) if not pd.isna(minuty) else "?") + " minut; " +
-        "porovnáváno se vzorkem stejné pozice (" + primary_pos + ", N=" + str(n_ref) + ")."
+    # čísla pro „produkci“
+    goals90 = fmt_num(player_row.get("Goals per 90", np.nan))
+    shots90 = fmt_num(player_row.get("Shots per 90", np.nan))
+    assists90 = fmt_num(player_row.get("Assists per 90", np.nan))
+    keyp90 = fmt_num(player_row.get("Key passes per 90", np.nan))
+    touch90_v = fmt_num(player_row.get("Touches in box per 90", np.nan))
+
+    # odstavec 1 – intro + fyzično
+    intro = (
+        jmeno + " (" + (str(int(vek)) if not pd.isna(vek) else "věk ?") + ", " + klub +
+        ") je " + arche + " – " + speed_hint + ", " + workrate_hint + ". " +
+        "V této sezóně odehrál " + (str(int(minuty)) if not pd.isna(minuty) else "?") +
+        " minut – vzorek je " + ("dostatečný" if not pd.isna(minuty) and minuty >= max(600, min_minutes) else "omezený") +
+        ". Porovnáváno se vzorkem stejné pozice (" + primary_pos + ", N=" + str(n_ref) + ")."
     )
 
-    # chování s/bez míče
-    attack_bits = []
-    if bucket(P["drib"]) in ["nadprum","elite"]:
-        attack_bits.append("v 1v1 je průrazný a umí měnit rytmus")
-    if bucket(P["cross"]) in ["nadprum","elite"]:
-        attack_bits.append("doručuje kvalitní míče z kraje/halfspace")
-    if bucket(P["keyp90"]) in ["nadprum","elite"]:
-        attack_bits.append("má nadprůměrnou poslední přihrávku")
-    if bucket(P["g90"]) in ["nadprum","elite"]:
-        attack_bits.append("má opakovatelný gólový výstup")
-    if not attack_bits:
-        attack_bits.append("s míčem volí bezpečné, funkční řešení")
-
-    defend_bits = []
-    if bucket(P["defd"]) in ["nadprum","elite"]:
-        defend_bits.append("1v1 zvládá s dobrým načasováním a kontaktem")
-    if bucket(P["aerial"]) in ["nadprum","elite"]:
-        defend_bits.append("je spolehlivý ve vzduchu a kryje zadní tyč")
-    if not defend_bits:
-        defend_bits.append("defenzivně spoléhá spíše na poziční hru")
-
-    profil = " Herně s míčem " + ", ".join(attack_bits) + "; bez míče " + ", ".join(defend_bits) + "."
-
-    # rizika
-    risks = []
-    if bucket(P["aerial"]) in ["slabe","podprum"] and primary_pos in ["CB","RB","LB","RWB","LWB"]:
-        risks.append("riziko na zadní tyči a při standardkách")
-    if bucket(P["keyp90"]) in ["slabe","podprum"] and primary_pos in ["LW","RW","AMF"]:
-        risks.append("nižší kvalita poslední přihrávky pod tlakem")
-    if bucket(P["g90"]) in ["slabe","podprum"] and primary_pos in ["CF","LW","RW"]:
-        risks.append("neefektivní koncovka vzhledem k objemu")
-    limity = (" Rizika: " + ", ".join(risks) + ".") if risks else ""
-
-    # fit
-    fit = []
-    if primary_pos in ["CB"]:
-        fit.append("sedí do trojice stoperů se zajištěním prostoru")
-        if bucket(P["passacc"]) in ["nadprum","elite"]:
-            fit.append("v dvojici obstojí, pokud má po boku rychlejšího partnera")
-    elif primary_pos in ["RB","LB","RWB","LWB"]:
-        fit.append("lepší v týmu s přechodem a vysokým postavením krajů")
-    elif primary_pos in ["LW","RW","LWF","RWF"]:
-        fit.append("nejvíc vytěží z izolací 1v1 a z rychlých přechodů")
-    elif primary_pos in ["CF","ST","CF9"]:
-        fit.append("uplatní se v boxových vzorcích a řízeném presinku")
+    # odstavec 2 – produkce + technika
+    prod_clauses = []
+    if bucket(P["g90"]) in ["slabe","podprum"] and bucket(P["a90"]) in ["slabe","podprum"]:
+        prod_clauses.append("finální výstup je slabý vzhledem k objemu")
+    elif bucket(P["g90"]) in ["nadprum","elite"] or bucket(P["a90"]) in ["nadprum","elite"]:
+        prod_clauses.append("finální výstup drží ligový standard nebo nad ním")
     else:
-        fit.append("role dle herního plánu, důležitá je kompaktnost mezi liniemi")
-    fit_sentence = " Herní využití: " + ", ".join(fit) + "."
+        prod_clauses.append("finální výstup kolísá kolem průměru")
 
-    # přísné doporučení
+    tech_bits = []
+    if bucket(P["drib"]) in ["nadprum","elite"]:
+        tech_bits.append("silný v driblinku")
+    if bucket(P["cross"]) in ["nadprum","elite"]:
+        tech_bits.append("dovede nadprůměrně centrovat")
+    pass_note = "celková přesnost přihrávek je v normě" if bucket(P["passacc"]) not in ["slabe"] else "přesnost přihrávek je slabší pod tlakem"
+
+    prod = (
+        "Do akcí se dostává pravidelně; " + ", ".join(prod_clauses) + ". " +
+        "Technicky " + (", ".join(tech_bits) if tech_bits else "volí spíše bezpečná řešení") +
+        "; " + pass_note + ". " +
+        "Tvorba pro spoluhráče je " + ("nadprůměrná" if bucket(P["keyp90"]) in ["nadprum","elite"] else "spíše pod průměrem") +
+        " (key passes/90: " + keyp90 + "). " +
+        "Zakončení vyžaduje " + ("lépe volit první dotyk v boxu" if bucket(P["g90"]) in ["slabe","podprum"] else "přenést současné vzorce do vyšší zátěže") +
+        " (góly/90: " + goals90 + ", střely/90: " + shots90 + "; doteky v boxu/90: " + touch90_v + ")."
+    )
+
+    # odstavec 3 – souboje
+    duel_txt = []
+    if primary_pos in ["LW","RW","LWF","RWF","AMF","CF","ST","CF9"]:
+        if bucket(P["offd"]) in ["nadprum","elite"]:
+            duel_txt.append("v ofenzivních duelech je nadprůměrný a objemově aktivní")
+        else:
+            duel_txt.append("ofenzivní duely drží spíše průměr")
+    if bucket(P["defd"]) in ["nadprum","elite"]:
+        duel_txt.append("defenzivně je spolehlivý v 1v1 a načasování")
+    else:
+        duel_txt.append("defenzivně je spíše poziční")
+    if bucket(P["aerial"]) in ["slabe","podprum"]:
+        duel_txt.append("ve vzduchu pod průměrem; target role mu nesedí")
+    elif bucket(P["aerial"]) in ["nadprum","elite"]:
+        duel_txt.append("ve vzduchu nad průměrem; kryje zadní tyč i standardky")
+    duels = "V soubojové činnosti " + ", ".join(duel_txt) + "."
+
+    # odstavec 4 – herní styl a přenositelnost
+    fit_bits = []
+    if primary_pos == "CB":
+        fit_bits.append("vhodný do struktur s trojicí stoperů a zajištěním prostoru")
+        if bucket(P["passacc"]) in ["nadprum","elite"]:
+            fit_bits.append("v dvojici zvládne první rozehrávku vedle mobilnějšího partnera")
+    elif primary_pos in ["RB","LB","RWB","LWB"]:
+        fit_bits.append("sedí do přechodové hry a vysokého postavení krajů")
+    elif primary_pos in ["LW","RW","LWF","RWF","AMF"]:
+        fit_bits.append("silný v otevřeném prostoru a proti nekompaktním obranám")
+        fit_bits.append("proti hlubokému bloku vliv klesá, pokud nemá stabilní rozhodující moment")
+    elif primary_pos in ["CF","ST","CF9"]:
+        fit_bits.append("uplatní se v boxových vzorcích (cutback, zadní tyč) a řízeném presinku")
+    else:
+        fit_bits.append("role dle plánu, důležitá je kompaktnost mezi liniemi")
+    style = "Herně mu sedí " + ", ".join(fit_bits) + "."
+
+    # odstavec 5 – přísné doporučení
     def strict_recommendation(pos, P, tone):
-        upper = (bucket(P["g90"]) in ["elite","nadprum"] or bucket(P["keyp90"]) in ["elite","nadprum"] or
+        upper = (bucket(P["g90"]) in ["elite","nadprum"] or bucket(P["a90"]) in ["elite","nadprum"] or
                  (pos=="CB" and (bucket(P["aerial"]) in ["elite","nadprum"] and bucket(P["passacc"]) in ["nadprum","elite"])))
         mid = (bucket(P["defd"]) in ["nadprum","elite"] or bucket(P["aerial"]) in ["nadprum","elite"] or
                bucket(P["cross"]) in ["nadprum","elite"] or bucket(P["drib"]) in ["nadprum","elite"])
         if tone == "Přísný":
             if not upper and not mid:
-                return "Nedoporučuji do klubů z horní poloviny tabulky; vhodný maximálně jako šířka kádru pro střed/dolní část."
+                return "Do top trojky jej nyní nedoporučuji; smysl dává dolní až střední patro tabulky jako šířka kádru."
             if upper:
                 return "Vhodný pro ambiciózní horní polovinu tabulky; do dominantního prostředí pouze s jasnou rolí a ochranou slabin."
             return "Použitelný pro střed tabulky; do top projektů jen pod konkrétní herní plán, jinak nedoporučuji."
         return "Reálně využitelný pro střed až horní střed tabulky; do topu po potvrzení konzistence ve finální třetině."
 
-    verdict = " Doporučení: " + strict_recommendation(primary_pos, P, tone)
+    rec = strict_recommendation(primary_pos, P, tone)
 
-    # kvant pro oporu výroku
-    kvant = (
-        " (kontext: přesnost přihrávek " + fmt_percentil(P["passacc"]) +
-        ", vzdušné souboje " + fmt_percentil(P["aerial"]) +
-        ", key passes " + fmt_percentil(P["keyp90"]) + ")."
-    )
+    # spojení do odstavců
+    paragraphs = [intro, prod, duels, style, "Doporučení: " + rec]
 
-    narativ = uvod + profil + limity + fit_sentence + verdict + kvant
-    st.write(narativ)
+    # výpis
+    st.write("\n\n".join(paragraphs))
 
     # -------------------- Export reportu (DOCX) --------------------
     st.subheader("Export reportu (DOCX)")
     if HAVE_DOCX:
-        # re-render grafů pro export
-        # RADAR
+        # re-render grafů
         buf_radar = io.BytesIO()
         vals = np.clip(np.array([0 if pd.isna(v) else v for v in radar_vals]), 0, 150)
         angles = np.linspace(0, 2*np.pi, len(vals), endpoint=False)
@@ -414,13 +408,11 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         plt.close(fig_r)
         buf_radar.seek(0)
 
-        # HEATMAP
         buf_heat = io.BytesIO()
         hm = np.array([[v if not pd.isna(v) else np.nan] for v in heat_vals], dtype=float)
-        hm_plot = np.nan_to_num(hm, nan=100.0)
         fig_h, ax_h = plt.subplots(figsize=(3.3, 0.26*len(heat_labels)+0.7))
         cmap = LinearSegmentedColormap.from_list("r2g", ["#b30000", "#ff6b6b", "#ffd11a", "#b7e1a1", "#1e7a1e"])
-        ax_h.imshow(hm_plot, cmap=cmap, vmin=0, vmax=150)
+        ax_h.imshow(np.nan_to_num(hm, nan=100.0), cmap=cmap, vmin=0, vmax=150)
         ax_h.set_yticks(range(len(heat_labels)))
         ax_h.set_yticklabels(heat_labels, fontsize=8)
         ax_h.set_xticks([])
@@ -440,7 +432,8 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         doc.add_paragraph(datetime.now().strftime("Vygenerováno: %d.%m.%Y %H:%M"))
 
         doc.add_heading("Narativní scouting report", level=1)
-        doc.add_paragraph(narativ)
+        for p in paragraphs:
+            doc.add_paragraph(p)
 
         doc.add_heading("Radar (% vs. liga – stejná pozice)", level=1)
         doc.add_picture(buf_radar, width=Inches(3.2))
