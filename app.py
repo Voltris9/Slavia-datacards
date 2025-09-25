@@ -434,6 +434,47 @@ def _collect_strengths_weaknesses(sec_scores, run_scores):
     weaknesses.sort(key=lambda x: x[1])
     return strengths[:6], weaknesses[:6]
 
+# stručné vysvětlení metrik pro report
+_METRIC_EXPL = {
+    "Góly /90":"gólová produkce",
+    "xG /90":"kvalita šancí (xG)",
+    "Asistence /90":"připravené góly",
+    "xA /90":"tvorba šancí (xA)",
+    "Shot assists /90":"přihrávky do střel",
+    "Klíčové přihrávky /90":"klíčová finalita",
+    "Smart passes /90":"kreativní průniky",
+    "Progresivní přihrávek /90":"posouvání hry dopředu",
+    "Do finální třetiny /90":"zásobování finální třetiny",
+    "Úspěšnost centrů %":"kvalita centrů",
+    "Second assists /90":"před-asistence",
+    "Driblingy /90":"objem 1v1",
+    "Úspěšnost dribblingu %":"efektivita 1v1",
+    "Úspěšnost of. duelů %":"síla v ofenzivních duelech",
+    "Progresivní běhy /90":"nesení míče vpřed",
+    "Defenzivní duely /90":"objem def. soubojů",
+    "Úspěšnost obr. duelů %":"úspěšnost def. soubojů",
+    "Interceptions /90":"čtení hry / zachycení",
+    "Sliding tackles /90":"slide zákroky",
+    "Úspěšnost vzdušných %":"vzdušné souboje",
+    "Fauly /90":"faulovost",
+    # běh:
+    "Total distance /90":"celková zátěž",
+    "High-intensity runs /90":"počet HI běhů",
+    "Sprints /90":"sprintový objem",
+    "Max speed (km/h)":"maximální rychlost",
+    "Average speed (km/h)":"průměrná rychlost",
+    "Accelerations /90":"akcelerace",
+    "Decelerations /90":"decelerace",
+    "High-speed distance /90":"vzdál. ve vysoké rychlosti",
+}
+
+def _explain_metric(label: str) -> str:
+    return _METRIC_EXPL.get(label, label.lower())
+
+def _format_strength_item(label: str, val: float) -> str:
+    return f"- {label}: {int(round(val))}% ({_band(val)}) – {_explain_metric(label)}"
+
+
 def _infer_archetype(role5, sec_scores, run_scores):
     G   = sec_scores.get("Ofenziva", {}).get("Góly /90", np.nan)
     xG  = sec_scores.get("Ofenziva", {}).get("xG /90", np.nan)
@@ -500,14 +541,19 @@ def _infer_archetype(role5, sec_scores, run_scores):
 def build_player_analysis_md(player, team, age, pos, role5, league_name,
                              sec_scores, sec_idx, overall, 
                              run_scores, run_idx, final_idx, thr_slavia):
+    # TOP/LOW metriky
     top_game = _topk({lab:sec_scores[k].get(lab,np.nan) 
                       for _, lst, k in blocks for _, lab in lst}, k=5, reverse=True)
     low_game = _topk({lab:sec_scores[k].get(lab,np.nan) 
                       for _, lst, k in blocks for _, lab in lst}, k=5, reverse=False)
 
-    strengths, weaknesses = _collect_strengths_weaknesses(sec_scores, run_scores)
+    strengths_all, weaknesses = _collect_strengths_weaknesses(sec_scores, run_scores)
+    # vezmu TOP 5 silných stránek napříč herními i běžeckými metrikami
+    top5_strengths = strengths_all[:5]
+
     archetype = _infer_archetype(role5, sec_scores, run_scores)
 
+    # vhodnost
     vhodnost = []
     if not pd.isna(final_idx):
         if not pd.isna(thr_slavia):
@@ -523,6 +569,45 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
         else:
             vhodnost.append("**Fortuna:Liga**: spíše nevhodný (<45%).")
 
+    # TIPY
+    tips = []
+    if role5 in ["RW","LW","RB"] and (not pd.isna(run_idx) and run_idx>=55):
+        tips.append("vysoké tempo a pressing; využívat náběhy za obranu")
+    if role5 in ["CM"] and (not pd.isna(sec_idx.get("Přihrávky",np.nan)) and sec_idx.get("Přihrávky",0)>=60):
+        tips.append("stavět do progresivních/rezirkulačních rolí ve výstavbě")
+    if role5=="CB" and (not pd.isna(sec_idx.get("Defenziva",np.nan)) and sec_idx.get("Defenziva",0)>=65):
+        tips.append("agresivní výstupy a krytí 1v1 zón")
+    if role5=="CF" and (not pd.isna(sec_idx.get("Ofenziva",np.nan)) and sec_idx.get("Ofenziva",0)>=65):
+        tips.append("fokus na zakončení v boxu; doplnit kvalitní servis")
+    if not tips:
+        tips.append("využití dle match-planu; profil vyvážený")
+
+    # RED FLAGS
+    red=[]
+    if not pd.isna(sec_idx.get("Přihrávky",np.nan)) and sec_idx.get("Přihrávky",np.nan)<=40: red.append("nízký progres/kvalita přihrávek – slabší build-up")
+    if not pd.isna(sec_idx.get("1v1",np.nan)) and sec_idx.get("1v1",np.nan)<=40: red.append("slabší 1v1 – riziko v izolacích")
+    if not pd.isna(sec_idx.get("Defenziva",np.nan)) and sec_idx.get("Defenziva",np.nan)<=40: red.append("def. limity – nutná strukturální ochrana")
+    if not pd.isna(run_idx) and run_idx<=40: red.append("běžecky pod ligovým standardem")
+
+    # --- Skautský narrativ (3–6 vět) ---
+    summary_parts = []
+    summary_parts.append(f"{player} ({team}, {pos}, {('role ' + role5) if role5 else 'role neznámá'}) profilově působí jako **{archetype}**.")
+    if top5_strengths:
+        s_names = ", ".join([f"{name}" for name, _ in top5_strengths[:3]])
+        summary_parts.append(f"Silné stránky dle dat: {s_names}.")
+    if weaknesses:
+        w_names = ", ".join([f"{name}" for name, _ in weaknesses[:2]])
+        summary_parts.append(f"Slabší oblasti: {w_names}.")
+    if not pd.isna(final_idx):
+        if not pd.isna(thr_slavia):
+            summary_parts.append(f"Celkově {int(round(final_idx))}% vs slávistický práh {int(round(thr_slavia))}% → "
+                                 f"{'vhodný' if final_idx>=thr_slavia else 'pod prahem'} pro Slavii.")
+        else:
+            summary_parts.append(f"Celkový index {int(round(final_idx))}%.")
+    if tips:
+        summary_parts.append(f"Doporučení využití: {tips[0]}.")
+
+    # --- Markdown výstup ---
     md=[]
     md.append(f"### 🧠 Analýza typologie: {player} ({team}, {pos}, věk {age})")
     md.append(f"- **Role5**: `{role5 or '—'}`  •  **Archetyp**: **{archetype}**")
@@ -531,30 +616,30 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
     md.append(f"- **Celkový index (herní + běžecký)**: {int(round(final_idx)) if not pd.isna(final_idx) else 'n/a'}%")
     if vhodnost: md.append("- " + "  \n- ".join(vhodnost))
 
-    if strengths:
-        md.append("\n**Silné stránky:**")
-        for lab,v in strengths: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
+    # TOP 5 silných stránek
+    if top5_strengths:
+        md.append("\n**TOP 5 silných stránek:**")
+        for lab, v in top5_strengths:
+            # vyhoď “ (běh)” pro přístup k vysvětlivce
+            base_lab = lab.replace(" (běh)", "")
+            md.append(_format_strength_item(base_lab, v))
+
+    # obecné silné/slabé
     if weaknesses:
         md.append("\n**Slabé stránky:**")
-        for lab,v in weaknesses: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
+        for lab,v in weaknesses[:5]:
+            base_lab = lab.replace(" (běh)", "")
+            md.append(f"- {lab}: {int(round(v))}% ({_band(v)}) – {_explain_metric(base_lab)}")
 
-    md.append("\n**TOP metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in top_game if not pd.isna(v)]) or "n/a"))
-    md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in low_game if not pd.isna(v)]) or "n/a"))
+    md.append("\n**TOP metriky (herní):** " + (", ".join([f\"{k} {int(round(v))}%\" for k, v in top_game if not pd.isna(v)]) or "n/a"))
+    md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f\"{k} {int(round(v))}%\" for k, v in low_game if not pd.isna(v)]) or "n/a"))
 
-    tips=[]
-    if role5 in ["RW","LW","RB"] and (not pd.isna(run_idx) and run_idx>=55): tips.append("vysoký pressing, využívej náběhy za obranu")
-    if role5 in ["CM"] and (not pd.isna(sec_idx.get("Přihrávky",np.nan)) and sec_idx.get("Přihrávky",0)>=60): tips.append("stavět do rolí progresivního passera")
-    if role5=="CB" and (not pd.isna(sec_idx.get("Defenziva",np.nan)) and sec_idx.get("Defenziva",0)>=65): tips.append("pokrývat silné 1v1 zóny, agresivní výstupy")
-    if role5=="CF" and (not pd.isna(sec_idx.get("Ofenziva",np.nan)) and sec_idx.get("Ofenziva",0)>=65): tips.append("prioritizovat finální třetinu, fokus na zakončení")
-    if not tips: tips.append("využití dle match-planu a soupeře; profil vyvážený")
+    # doporučení + red flags
     md.append("\n**Doporučení pro využití:**\n- " + "\n- ".join(tips))
-
-    red=[]
-    if not pd.isna(sec_idx.get("Přihrávky",np.nan)) and sec_idx.get("Přihrávky",np.nan)<=40: red.append("nízká kvalita/progres přihrávek – hůře do pozic vyžadujících výstavbu")
-    if not pd.isna(sec_idx.get("1v1",np.nan)) and sec_idx.get("1v1",np.nan)<=40: red.append("slabší 1v1 – pozor u rolí s častým izolovaným 1v1")
-    if not pd.isna(sec_idx.get("Defenziva",np.nan)) and sec_idx.get("Defenziva",np.nan)<=40: red.append("def. limity – vyžaduje krytí strukturou")
-    if not pd.isna(run_idx) and run_idx<=40: red.append("běžecky pod ligovým standardem – riziko v intenzivních zápasech")
     if red: md.append("\n**Red flags / omezení:**\n- " + "\n- ".join(red))
+
+    # SKAUTSKÝ REPORT
+    md.append("\n---\n**📝 Skautský report (stručný):** " + " ".join(summary_parts))
 
     return "\n".join(md)
 
