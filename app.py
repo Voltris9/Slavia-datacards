@@ -136,8 +136,7 @@ def section_scores(row,agg,metric_w=None):
         else:
             arr=[v for v in vals.values() if not pd.isna(v)]
             sec_idx[key]=float(np.mean(arr)) if arr else np.nan
-    return sec_scores,sec_idx
-
+    
 def role_index(sec_idx,weights):
     acc=tot=0.0
     for k in ["Defenziva","Ofenziva","Přihrávky","1v1"]:
