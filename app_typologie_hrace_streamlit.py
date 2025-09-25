@@ -1,6 +1,6 @@
 # Streamlit app: Typologie hráče – automatický scouting report (CZ)
 # ---------------------------------------------------------------
-# Požadavky: pip install -r requirements.txt
+# Požadavky: pip install streamlit pandas numpy matplotlib python-docx openpyxl
 # Spuštění:  streamlit run app_typologie_hrace_streamlit.py
 # Vstupy:    1) Liga (CZE1.xlsx)  2) Profil hráče (xlsx) NEBO výběr hráče z ligového souboru
 # Výstup:    Vizuály + stažitelný .docx scouting report
@@ -35,7 +35,9 @@ def pct(player_val, league_val):
         return np.nan
     return (player_val / league_val) * 100.0
 
-# Slovní pásma (méně procent, víc přehlednosti)
+# Popisek podle prahu (méně procent v textu, jen slovní hodnocení)
+# thr_low=70, thr_high=130 odpovídá pevné škále heatmapy
+
 def label_band(v, thr_low=70, thr_high=130):
     if pd.isna(v):
         return "bez dat"
@@ -45,7 +47,7 @@ def label_band(v, thr_low=70, thr_high=130):
         return "nadprůměr"
     return "ligový standard"
 
-# Mapování pozic do referenčních skupin
+# Filtr podle pozice – mapujeme do skupin pro srovnání
 POSITION_GROUPS = {
     "CF": ["CF"],
     "Křídla/AMF": ["LW", "RW", "LWF", "RWF", "AMF"],
@@ -59,7 +61,7 @@ def infer_group_from_position(pos_text: str) -> str:
     for group, tokens in POSITION_GROUPS.items():
         if any(tok in pos_text for tok in tokens):
             return group
-    return "Křídla/AMF"  # default pro OF profily
+    return "Křídla/AMF"  # default bezpečný pro OF profily
 
 # -------------------- UI – vstupy --------------------
 colA, colB = st.columns([1,1])
@@ -96,19 +98,14 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
 
     # Zvolená referenční skupina pro ligový průměr
     default_group = infer_group_from_position(pozice_raw)
-    zvolena_skup = st.selectbox(
-        "Referenční skupina pro srovnání (pozice):",
-        list(POSITION_GROUPS.keys()),
-        index=list(POSITION_GROUPS.keys()).index(default_group)
-    )
+    zvolena_skup = st.selectbox("Referenční skupina pro srovnání (pozice):", list(POSITION_GROUPS.keys()), index=list(POSITION_GROUPS.keys()).index(default_group))
 
     # Filtrování ligového průměru podle skupiny
     tokens = POSITION_GROUPS[zvolena_skup]
     mask = league_df["Position"].astype(str).str.upper().apply(lambda s: any(tok in s for tok in tokens))
     league_pos = league_df.loc[mask].copy()
-    league_means = league_pos.mean(numeric_only=True)
 
-    # Metriky pro RADAR a HEATMAPU (v % vůči průměru na pozici)
+    # Připravíme metriky pro radar a heatmapu
     radar_map = {
         "Ofenzivní duely vyhrané %": "Offensive duels won, %",
         "Defenzivní duely vyhrané %": "Defensive duels won, %",
@@ -130,13 +127,17 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         "Asistence /90": "Assists per 90",
     }
 
+    league_means = league_pos.mean(numeric_only=True)
+
     # Výpočty % vs liga
-    radar_labels, radar_vals = [], []
+    radar_vals = []
+    radar_labels = []
     for lab, col in radar_map.items():
         radar_labels.append(lab)
         radar_vals.append(pct(safe_float(player_row.get(col, np.nan)), safe_float(league_means.get(col, np.nan))))
 
-    heat_labels, heat_vals = [], []
+    heat_vals = []
+    heat_labels = []
     for lab, col in heat_map.items():
         heat_labels.append(lab)
         heat_vals.append(pct(safe_float(player_row.get(col, np.nan)), safe_float(league_means.get(col, np.nan))))
@@ -148,12 +149,12 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     vals_closed = np.concatenate([vals, vals[:1]])
     angles_closed = np.concatenate([angles, angles[:1]])
 
-    fig_radar, ax = plt.subplots(figsize=(6.5, 6.5), subplot_kw=dict(polar=True))
+    fig_radar, ax = plt.subplots(figsize=(5, 5), subplot_kw=dict(polar=True))
     ax.plot(angles_closed, vals_closed, linewidth=2, label=jmeno)
     ax.fill(angles_closed, vals_closed, alpha=0.2)
     ax.plot(angles_closed, np.ones_like(vals_closed)*100, linestyle="--", linewidth=1, label="Liga = 100%")
     ax.set_xticks(angles)
-    ax.set_xticklabels(radar_labels, fontsize=9)
+    ax.set_xticklabels(radar_labels, fontsize=8)
     ax.set_yticks([50,100,150])
     ax.set_yticklabels(["50%","100%","150%"])
     ax.set_ylim(0,150)
@@ -166,9 +167,10 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     cmap = LinearSegmentedColormap.from_list("r2g", ["#b30000", "#ff6b6b", "#ffd11a", "#b7e1a1", "#1e7a1e"])  # červená→žlutá→zelená
 
     hm = np.array([[v if not pd.isna(v) else np.nan] for v in heat_vals], dtype=float)
-    hm_plot = np.nan_to_num(hm, nan=100.0)  # Na zobrazení NaN dáme 100, textem označíme "bez dat"
+    # Na náhradu NaN dáme 100, ale zvýrazníme textem "bez dat"
+    hm_plot = np.nan_to_num(hm, nan=100.0)
 
-    fig_hm, ax2 = plt.subplots(figsize=(5.0, 0.45*len(heat_labels)+1))
+    fig_hm, ax2 = plt.subplots(figsize=(4.2, 0.32*len(heat_labels)+0.8))
     im = ax2.imshow(hm_plot, cmap=cmap, vmin=0, vmax=150)
     ax2.set_yticks(range(len(heat_labels)))
     ax2.set_yticklabels(heat_labels)
@@ -176,7 +178,7 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
 
     for i, v in enumerate(heat_vals):
         txt = "bez dat" if pd.isna(v) else f"{v:.1f}"
-        ax2.text(0, i, txt, ha='center', va='center', fontsize=10, fontweight='bold', color='black')
+        ax2.text(0, i, txt, ha='center', va='center', fontsize=9, fontweight='bold', color='black')
 
     ax2.set_title(f"{jmeno} – komplexní činnosti (% vs. liga, škála 0–150)")
     st.pyplot(fig_hm, use_container_width=True)
@@ -188,37 +190,65 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     g90 = pct(safe_float(player_row.get("Goals per 90", np.nan)), safe_float(league_means.get("Goals per 90", np.nan)))
     a90 = pct(safe_float(player_row.get("Assists per 90", np.nan)), safe_float(league_means.get("Assists per 90", np.nan)))
 
+    # slovní popisy pro silné/slabé stránky
+    plus_map = {
+        "Úspěšnost driblinků %": "driblinku (rychlý první krok, 1v1)",
+        "Úspěšnost centrů %": "centrech a doručování míče do nebezpečné zóny",
+        "Ofenzivní duely vyhrané %": "ofenzivních duelech (udrží míč, prosazuje se v kontaktu)",
+        "Defenzivní duely vyhrané %": "týmové defenzivní práci a presinku",
+        "Úspěšnost přihrávek celkem %": "celkové přesnosti přihrávek"
+    }
+    minus_map = {
+        "Hlavičkové souboje vyhrané %": "hře ve vzduchu",
+    }
+
+    plus_list = [desc for k, desc in plus_map.items() if slovnik.get(k) == "nadprůměr"]
+    minus_list = [desc for k, desc in minus_map.items() if slovnik.get(k) == "podprůměr"]
+
     paragraphs = []
     paragraphs.append(
         f"{jmeno} ({int(vek) if not pd.isna(vek) else 'věk ?'}, {klub}) má v této sezoně odehráno {int(minuty) if not pd.isna(minuty) else '?'} minut, "
         f"vzorek je {'dostatečný' if (not pd.isna(minuty) and minuty>=900) else 'omezený'}. "
         f"Typově jde o hráče skupiny {zvolena_skup}."
     )
+
+    # Souboje + technika v souvislém komentáři
     paragraphs.append(
-        "Soubojově: ofenzivní duely " + slovnik["Ofenzivní duely vyhrané %"] +
-        ", defenzivní duely " + slovnik["Defenzivní duely vyhrané %"] +
-        ", hlavičkové souboje " + slovnik["Hlavičkové souboje vyhrané %"] + ". "
-        "Technicky: driblink " + slovnik["Úspěšnost driblinků %"] +
-        ", centry " + slovnik["Úspěšnost centrů %"] +
+        "Soubojově: ofenzivní duely " + slovnik["Ofenzivní duely vyhrané %"] + 
+        ", defenzivní duely " + slovnik["Defenzivní duely vyhrané %"] + 
+        ", hlavičkové souboje " + slovnik["Hlavičkové souboje vyhrané %"] + ". " +
+        "Technicky: driblink " + slovnik["Úspěšnost driblinků %"] + 
+        ", centry " + slovnik["Úspěšnost centrů %"] + 
         ", celková přesnost přihrávek " + slovnik["Úspěšnost přihrávek celkem %"] + "."
     )
 
-    prod = "velmi slabá" if (not pd.isna(g90) and g90 < 70 and not pd.isna(a90) and a90 < 70) else ("slabší" if ((pd.isna(g90) or g90 < 100) or (pd.isna(a90) or a90 < 100)) else "dobrá")
-    paragraphs.append("Produktivita je " + prod + ", rozhodující je výkon v poslední třetině (góly, poslední přihrávka).")
+    # V čem vyniká / slabiny – jako souvislá věta
+    if plus_list:
+        paragraphs.append("V čem vyniká: " + ", ".join(plus_list) + ".")
+    if minus_list:
+        paragraphs.append("Slabiny: " + ", ".join(minus_list) + ".")
 
-    styl = []
-    # Nadprůměrné oblasti → doporučené herní prostředí
-    if label_band(heat_vals[3]) == "nadprůměr":  # driblink
-        styl.append("otevřený prostor a 1v1")
-    if label_band(heat_vals[4]) == "nadprůměr":  # centry
-        styl.append("centry ze strany")
-    if label_band(heat_vals[0]) == "nadprůměr":
-        styl.append("napadání a útočná agresivita")
-    if label_band(heat_vals[1]) == "nadprůměr":
-        styl.append("týmová defenziva/pressing")
-    if styl:
-        paragraphs.append("Herně sedí do prostředí: " + ", ".join(styl) + ".")
+    # Produktivita – slovní hodnocení
+    if (not pd.isna(g90) and g90 < 70) and (not pd.isna(a90) and a90 < 70):
+        prod_txt = "velmi slabá – chybí góly i finální přihrávka; problém v poslední volbě a provedení v boxu."
+    elif (not pd.isna(g90) and g90 >= 100) or (not pd.isna(a90) and a90 >= 100):
+        prod_txt = "dobrá – metriky gólů/asistencí odpovídají či převyšují ligový standard na pozici."
+    else:
+        prod_txt = "spíše slabší – do akcí se dostává, ale výstup je nepravidelný."
+    paragraphs.append("Produktivita: " + prod_txt)
 
+    # Herní prostředí podle silných stránek
+    fit_parts = []
+    if slovnik.get("Úspěšnost driblinků %") == "nadprůměr":
+        fit_parts.append("otevřený prostor a 1v1")
+    if slovnik.get("Úspěšnost centrů %") == "nadprůměr":
+        fit_parts.append("koncovka po centrech ze strany")
+    if slovnik.get("Ofenzivní duely vyhrané %") == "nadprůměr":
+        fit_parts.append("aktivní presink a útočná agresivita")
+    if fit_parts:
+        paragraphs.append("Ideální herní prostředí: " + ", ".join(fit_parts) + ".")
+
+    # Přísné doporučení
     if (not pd.isna(g90) and g90 < 70) and (not pd.isna(a90) and a90 < 70):
         doporuceni = "Nedoporučuji pro top kluby ligy; dává smysl v dolní/střední části tabulky s důrazem na přechodovou fázi a presink, bez tlaku na vysokou gólovou produkci."
     elif (not pd.isna(g90) and g90 >= 100) or (not pd.isna(a90) and a90 >= 100):
@@ -228,12 +258,20 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
 
     paragraphs.append("Doporučení: " + doporuceni)
 
-    report_text = "\n\n".join(paragraphs)
+    report_text = "
+
+".join(paragraphs)
+    st.write(report_text)
+
+    # -------------------- Export do DOCX --------------------
+    st.subheader("Export reportu (DOCX)")
+ "\n\n".join(text)
     st.write(report_text)
 
     # -------------------- Export do DOCX --------------------
     st.subheader("Export reportu (DOCX)")
 
+    # Uložíme grafy do paměti
     buf_radar = io.BytesIO()
     fig_radar.savefig(buf_radar, format='png', dpi=200, bbox_inches='tight')
     buf_radar.seek(0)
@@ -242,6 +280,7 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     fig_hm.savefig(buf_heat, format='png', dpi=200, bbox_inches='tight')
     buf_heat.seek(0)
 
+    # Sestavení dokumentu
     doc = Document()
     doc.add_heading(f"Typologie hráče – {jmeno}", level=0)
     meta = doc.add_paragraph()
@@ -250,14 +289,14 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     doc.add_paragraph(datetime.now().strftime("Vygenerováno: %d.%m.%Y %H:%M"))
 
     doc.add_heading("Scouting report", level=1)
-    for p in paragraphs:
+    for p in text:
         doc.add_paragraph(p)
 
     doc.add_heading("Radar (% vs. liga)", level=1)
-    doc.add_picture(buf_radar, width=Inches(6.0))
+    doc.add_picture(buf_radar, width=Inches(4.5))
 
     doc.add_heading("Heatmapa (0–150 %)", level=1)
-    doc.add_picture(buf_heat, width=Inches(5.0))
+    doc.add_picture(buf_heat, width=Inches(3.8))
 
     out = io.BytesIO()
     doc.save(out)
@@ -272,3 +311,4 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
 
 else:
     st.info("Nahraj ligový soubor a vyber/nahraj hráče – pak ti vygeneruju vizuály a stažitelný report.")
+
