@@ -1,4 +1,4 @@
-# app.py — Slavia datacards (kratší verze, stejná funkčnost)
+# app.py — Slavia datacards (kratší verze, stejná funkčnost) + ANALYTICKÝ MODUL
 import re, unicodedata, zipfile
 from io import BytesIO
 import numpy as np, pandas as pd, matplotlib.pyplot as plt
@@ -124,19 +124,21 @@ def norm_metric(pop,key,val):
     if s.empty or pd.isna(v): return np.nan
     mn,mx=s.min(),s.max();  return 50.0 if mx==mn else float(np.clip((v-mn)/(mx-mn)*100,0,100))
 
-def section_scores(row,agg,metric_w=None):
-    sec_scores,sec_idx={}
-    sec_scores,sec_idx={},{}
-    for _,lst,key in blocks:
-        vals={lab:norm_metric(agg,eng,get_val_alias(row,eng)) for eng,lab in lst}
-        sec_scores[key]=vals
+def section_scores(row, agg, metric_w=None):
+    # OPRAVENÁ VERZE (žádné sec_scores,sec_idx={})
+    sec_scores = {}
+    sec_idx = {}
+    for _, lst, key in blocks:
+        vals = {lab: norm_metric(agg, eng, get_val_alias(row, eng)) for eng, lab in lst}
+        sec_scores[key] = vals
         if metric_w and metric_w.get(key):
-            w=metric_w[key]; wsum=sum(w.values()) or 1
-            sec_idx[key]=float(sum(v*w.get(l,0) for l,v in vals.items() if not pd.isna(v))/wsum)
+            w = metric_w[key]; wsum = sum(w.values()) or 1
+            sec_idx[key] = float(sum(v * w.get(l, 0) for l, v in vals.items() if not pd.isna(v)) / wsum)
         else:
-            arr=[v for v in vals.values() if not pd.isna(v)]
-            sec_idx[key]=float(np.mean(arr)) if arr else np.nan
-    
+            arr = [v for v in vals.values() if not pd.isna(v)]
+            sec_idx[key] = float(np.mean(arr)) if arr else np.nan
+    return sec_scores, sec_idx
+
 def role_index(sec_idx,weights):
     acc=tot=0.0
     for k in ["Defenziva","Ofenziva","Přihrávky","1v1"]:
@@ -161,7 +163,7 @@ WYS_TO_ROLE={"RCB":"CB","LCB":"CB","RCB3":"CB","LCB3":"CB","CB":"CB","RB":"RB","
              "CF":"CF","ST":"CF","FW":"CF","FORWARD":"CF","STRIKER":"CF"}
 ROLE_PATTERNS=[("CB",r"(CB|CENTRE\s*BACK|CENTER\s*BACK|CENTRAL\s*DEF(ENDER)?|DEF(ENDER)?\b(?!.*MID))"),
                ("RB",r"(RB|LB|RWB|LWB|WB|FULL\s*BACK|WING\s*BACK)"),
-               ("CM",r"(DMF|CMF|AMF|DMF|CM|AM|MIDFIELDER|MID)"),
+               ("CM",r"(DMF|CMF|AMF|CM|AM|MIDFIELDER|MID)"),
                ("RW",r"(RW|LW|WINGER|W(?!B)\b|RIGHT\s*WING|LEFT\s*WING)"),
                ("CF",r"(CF|ST|FW|FORWARD|STRIKER|CENTRE\s*FORWARD|CENTER\s*FORWARD)")]
 def _primary_wyscout_tag(pos_text:str) -> str: return "" if not pos_text else str(pos_text).split(",")[0].strip().upper()
@@ -368,7 +370,7 @@ def compute_overall_and_run(row, league_agg, run_cz_df, run_df_for_row, team_hin
 def final_from_overall_and_run(overall, run_idx, w_run): return (1.0-w_run)*overall + w_run*run_idx if not pd.isna(run_idx) else overall
 
 def compute_slavia_role_thresholds(cz_game_df, cz_run_df, w_run, how="Medián"):
-    thr={}; 
+    thr={}
     if cz_game_df is None or cz_game_df.empty: return thr
     g=normalize_core_cols(cz_game_df.copy())
     if not {"Player","Team","Position"}.issubset(g.columns): return thr
@@ -399,8 +401,7 @@ def compute_slavia_role_thresholds(cz_game_df, cz_run_df, w_run, how="Medián"):
     thr={k:float(v["Final"].mean() if how=="Průměr" else v["Final"].median()) for k,v in df.groupby("Role5")}
     return thr
 
-# >>> ANALYSIS MODULE START ----------------------------------------------------
-
+# ---------- ANALYTICKÝ MODUL ----------
 def _band(p):
     if pd.isna(p): return "n/a"
     p=float(p)
@@ -522,7 +523,7 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
         else:
             vhodnost.append("**Fortuna:Liga**: spíše nevhodný (<45%).")
 
-    md = []
+    md=[]
     md.append(f"### 🧠 Analýza typologie: {player} ({team}, {pos}, věk {age})")
     md.append(f"- **Role5**: `{role5 or '—'}`  •  **Archetyp**: **{archetype}**")
     md.append(f"- **Role-index (herní, vážený)**: {int(round(overall)) if not pd.isna(overall) else 'n/a'}%")
@@ -532,15 +533,13 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
 
     if strengths:
         md.append("\n**Silné stránky:**")
-        for lab,v in strengths:
-            md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
+        for lab,v in strengths: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
     if weaknesses:
         md.append("\n**Slabé stránky:**")
-        for lab,v in weaknesses:
-            md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
+        for lab,v in weaknesses: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
 
-    md.append("\n**TOP metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in top_game if not pd.isna(v)]) or "n/a"))
-    md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f"{k} {int(round(v))}%" for k,v in low_game if not pd.isna(v)]) or "n/a"))
+    md.append("\n**TOP metriky (herní):** " + (", ".join([f\"{k} {int(round(v))}%\" for k,v in top_game if not pd.isna(v)]) or "n/a"))
+    md.append("**NEJSLABŠÍ metriky (herní):** " + (", ".join([f\"{k} {int(round(v))}%\" for k,v in low_game if not pd.isna(v)]) or "n/a"))
 
     tips=[]
     if role5 in ["RW","LW","RB"] and (not pd.isna(run_idx) and run_idx>=55): tips.append("vysoký pressing, využívej náběhy za obranu")
@@ -555,8 +554,7 @@ def build_player_analysis_md(player, team, age, pos, role5, league_name,
     if not pd.isna(sec_idx.get("1v1",np.nan)) and sec_idx.get("1v1",np.nan)<=40: red.append("slabší 1v1 – pozor u rolí s častým izolovaným 1v1")
     if not pd.isna(sec_idx.get("Defenziva",np.nan)) and sec_idx.get("Defenziva",np.nan)<=40: red.append("def. limity – vyžaduje krytí strukturou")
     if not pd.isna(run_idx) and run_idx<=40: red.append("běžecky pod ligovým standardem – riziko v intenzivních zápasech")
-    if red:
-        md.append("\n**Red flags / omezení:**\n- " + "\n- ".join(red))
+    if red: md.append("\n**Red flags / omezení:**\n- " + "\n- ".join(red))
 
     return "\n".join(md)
 
@@ -568,20 +566,16 @@ def build_run_only_md(player, team, age, pos, role5, run_idx, run_scores):
     md.append(f"- **Běžecký index**: {int(round(run_idx)) if not pd.isna(run_idx) else 'n/a'}%")
     if strengths:
         md.append("\n**Silné stránky (běh):**")
-        for lab,v in strengths:
-            md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
+        for lab,v in strengths: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
     if weaknesses:
         md.append("\n**Slabé stránky (běh):**")
-        for lab,v in weaknesses:
-            md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
+        for lab,v in weaknesses: md.append(f"- {lab}: {int(round(v))}% ({_band(v)})")
     tips=[]
     if not pd.isna(run_idx) and run_idx>=55: tips.append("vhodný do vysoké intenzity a pressingu")
     elif not pd.isna(run_idx) and run_idx<45: tips.append("šetřit vysoké běžecké nároky, řídit vytížení")
     if not tips: tips.append("běžecký profil neutrální/kontextový")
     md.append("\n**Doporučení:**\n- " + "\n- ".join(tips))
     return "\n".join(md)
-
-# >>> ANALYSIS MODULE END ------------------------------------------------------
 
 # ---------- UI: Tabs ----------
 tab_card, tab_search = st.tabs(["Karta hráče (herní + běžecká)", "Vyhledávání hráčů"])
@@ -620,7 +614,7 @@ with tab_card:
         fig=render_run_card(row.get("Player",""),row.get("Team",""),row.get("Position","—"),row.get("Age","n/a"),r_scores,r_abs,run_idx,verdict,role5=role5 or None)
         st.pyplot(fig); bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight"); st.download_button("📥 Stáhnout běžeckou kartu",data=bio.getvalue(),file_name=f"{sel}_run.png",mime="image/png"); plt.close(fig)
 
-        # === Textová analýza (běžecká větev) ===
+        # Analytický text pro běžeckou větev
         with st.expander("🧠 Analýza typologie hráče (auto report)"):
             report_md = build_run_only_md(
                 player=row.get("Player",""), team=row.get("Team",""), age=row.get("Age","n/a"),
@@ -652,7 +646,7 @@ with tab_card:
     fig=render_card_visual(player,team,pos,age,scores,sec_idx,overall,verdict,run_scores,run_abs,run_idx,final_index=final_idx, role5=role5)
     st.pyplot(fig); bio=BytesIO(); fig.savefig(bio,format="png",dpi=180,bbox_inches="tight"); st.download_button("📥 Stáhnout kartu (PNG)",data=bio.getvalue(),file_name=f"{player}.png",mime="image/png"); plt.close(fig)
 
-    # === Textová analýza typologie (kombinovaná větev) ===
+    # Analytický text – kombinovaná větev
     with st.expander("🧠 Analýza typologie hráče (auto report)"):
         league_name_disp = "CZ liga"
         thr_role = slavia_thr.get(role5, np.nan) if 'slavia_thr' in locals() else np.nan
