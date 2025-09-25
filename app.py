@@ -402,6 +402,13 @@ def compute_slavia_role_thresholds(cz_game_df, cz_run_df, w_run, how="Medián"):
     return thr
 
 # ---------- ANALYTICKÝ MODUL ----------
+def _lvl(v):
+    """Lidsky čitelná úroveň: '68 % (nadprůměr)' nebo 'n/a'."""
+    return "n/a" if pd.isna(v) else f"{_pct(v)} % ({_band(v)})"
+
+def _is_high(v, th=65):
+    return (not pd.isna(v)) and (_pct(v) >= th)
+
 def _band(p):
     if pd.isna(p): return "n/a"
     p=float(p)
@@ -459,33 +466,42 @@ _METRIC_EXPL = {
 def _build_long_scout_report(player, team, pos, role5,
                              sec_scores, sec_idx, overall,
                              run_scores, run_idx, final_idx, thr_slavia, archetype):
-    # vytažení často používaných metrik (percentily)
+    # zkratky pro čtení metrik (v procentech 0–100 z našeho srovnání)
     def g(sec, lab): 
         return sec_scores.get(sec, {}).get(lab, np.nan)
 
-    # herní sekce
+    # sekční indexy
     def_i = sec_idx.get("Defenziva", np.nan)
     off_i = sec_idx.get("Ofenziva", np.nan)
     pas_i = sec_idx.get("Přihrávky", np.nan)
     one_i = sec_idx.get("1v1", np.nan)
 
-    # klíčové metriky
-    G   = g("Ofenziva", "Góly /90"); xG = g("Ofenziva","xG /90")
-    xA  = g("Ofenziva","xA /90");   SA  = g("Ofenziva","Shot assists /90")
+    # ofenziva / tvorba
+    G   = g("Ofenziva", "Góly /90")
+    xG  = g("Ofenziva", "xG /90")
+    xA  = g("Ofenziva", "xA /90")
+    SA  = g("Ofenziva", "Shot assists /90")
+
+    # passing / progres
     KP  = g("Přihrávky","Klíčové přihrávky /90")
     SP  = g("Přihrávky","Smart passes /90")
     PP  = g("Přihrávky","Progresivní přihrávek /90")
     CR  = g("Přihrávky","Úspěšnost centrů %")
-    DR  = g("1v1","Driblingy /90"); DRp = g("1v1","Úspěšnost dribblingu %")
+
+    # 1v1
+    DR  = g("1v1","Driblingy /90")
+    DRp = g("1v1","Úspěšnost dribblingu %")
     ODp = g("1v1","Úspěšnost of. duelů %")
     PR  = g("1v1","Progresivní běhy /90")
+
+    # defenziva
     DDp = g("Defenziva","Úspěšnost obr. duelů %")
     INT = g("Defenziva","Interceptions /90")
     ADp = g("Defenziva","Úspěšnost vzdušných %")
     FOU = g("Defenziva","Fauly /90")
 
-    # běh (percentily vs CZ role-benchmark)
-    rs = run_scores.get(RUN_KEY, {}) if run_scores else {}
+    # běh (role-benchmark CZ)
+    rs  = run_scores.get(RUN_KEY, {}) if run_scores else {}
     HIR = rs.get("High-intensity runs /90", np.nan)
     SPR = rs.get("Sprints /90", np.nan)
     HSD = rs.get("High-speed distance /90", np.nan)
@@ -495,115 +511,155 @@ def _build_long_scout_report(player, team, pos, role5,
     DEC = rs.get("Decelerations /90", np.nan)
     TDL = rs.get("Total distance /90", np.nan)
 
+    p = []  # odstavce
+
     # 1) Úvod
-    s = []
-    intro = []
-    intro.append(f"{player} ({team}, {pos}) působí dle dat jako **{archetype}**"
-                 f"{' v roli ' + role5 if role5 else ''}.")
-    if not pd.isna(overall):
-        intro.append(f"Vážený herní index je { _pct(overall) }%, "
-                     f"běžecký index { 'n/a' if pd.isna(run_idx) else str(_pct(run_idx)) + '%' }"
-                     f" a celkový mix { 'n/a' if pd.isna(final_idx) else str(_pct(final_idx)) + '%' }.")
-    if not pd.isna(thr_slavia) and not pd.isna(final_idx):
-        verdict = "nad prahem a typově vhodný" if final_idx >= thr_slavia else "pod prahem pro aktuální roli ve Slavii"
-        intro.append(f"Ve srovnání s prahovou hodnotou Slavia pro roli {role5 or '—'} "
-                     f"({ _pct(thr_slavia) }%) je hráč {verdict}.")
-    s.append(" ".join(intro))
+    p.append(
+        f"{player} ({team}, {pos}) působí v datech jako **{archetype}**"
+        f"{(' v roli ' + role5) if role5 else ''}. V našich indexech (škála 0–100) "
+        f"dosahuje herního souhrnu **{_lvl(overall)}**, běžeckého profilu **{_lvl(run_idx)}** "
+        f"a kombinovaného výsledku **{_lvl(final_idx)}**. "
+        + (
+            f"V porovnání s interním prahem Slavie pro danou roli (**{_pct(thr_slavia)} %**) "
+            f"je hráč **{'nad prahem' if (not pd.isna(final_idx) and not pd.isna(thr_slavia) and final_idx>=thr_slavia) else 'pod prahem'}**, "
+            f"což je důležitá informace pro rozhodnutí o přestupu."
+            if not pd.isna(thr_slavia) else
+            "Pro přímé srovnání se slávistickým standardem chybí role-prahová hodnota; hodnotíme tedy čistě relativně k lize."
+        )
+    )
 
-    # 2) Herní chování (sekce)
-    sec_sent = []
-    strong_secs = [(k, v) for k, v in [("Ofenziva", off_i), ("Přihrávky", pas_i), ("1v1", one_i), ("Defenziva", def_i)] if not pd.isna(v)]
-    if strong_secs:
-        strong_secs.sort(key=lambda x: x[1], reverse=True)
-        best = strong_secs[0][0]
-        hi = [k for k, v in strong_secs if v >= 65]
-        lo = [k for k, v in strong_secs if v <= 45]
-        sec_sent.append(f"Nejsilnější sekcí je **{best}** "
-                        f"({ _pct(dict(strong_secs)[best]) }%).")
-        if hi:
-            sec_sent.append("Nadprůměrně vychází: " + ", ".join([f"{k} ({_pct(dict(strong_secs)[k])}%)" for k in hi]) + ".")
-        if lo:
-            sec_sent.append("Limity vidíme v: " + ", ".join([f"{k} ({_pct(dict(strong_secs)[k])}%)" for k in lo]) + ".")
-    s.append(" ".join(sec_sent))
+    # 2) Herní charakteristika – co je na očích
+    best_sec = max(
+        [("Ofenziva", off_i), ("Přihrávky", pas_i), ("1v1", one_i), ("Defenziva", def_i)],
+        key=lambda kv: -999 if pd.isna(kv[1]) else kv[1]
+    )[0]
+    sec_notes = []
+    if _is_high(off_i): sec_notes.append(f"ofenziva **{_lvl(off_i)}** (produkce, tlak na bránu)")
+    if _is_high(pas_i): sec_notes.append(f"přihrávky **{_lvl(pas_i)}** (posouvání hry dopředu a tvorba)")
+    if _is_high(one_i): sec_notes.append(f"1v1 **{_lvl(one_i)}** (individuální průniky a souboje)")
+    if _is_high(def_i): sec_notes.append(f"defenziva **{_lvl(def_i)}** (zisky a obranné souboje)")
+    if sec_notes:
+        p.append(
+            "Z hlediska sekcí působí nejsilněji **" + best_sec + "**; "
+            "konkrétně platí, že " + ", ".join(sec_notes) + ". "
+            "Pro laické čtení: čím blíže je hodnota ke 100 %, tím více hráč dominuje v ligovém kontextu."
+        )
 
-    # 3) On-ball profil (role-specifikace)
+    # 3) On-ball přínos – co dělá s míčem
     ob = []
-    roleU = (role5 or "").upper()
-    if roleU in ("RW","LW"):
-        if max(_pct(DR) or 0, _pct(DRp) or 0, _pct(PR) or 0) >= 70:
-            ob.append("Silný **1v1** s tendencí přebírat hráče a posouvat akci nesením míče.")
-        if max(_pct(KP) or 0, _pct(SA) or 0, _pct(xA) or 0) >= 65:
-            ob.append("Má kreativní výstup ve **finální třetině** (přihrávky do zakončení/xA).")
-        if max(_pct(G) or 0, _pct(xG) or 0) >= 65:
-            ob.append("Nese gólovou hrozbu (inside-forward charakter).")
-        if _pct(CR) and _pct(CR) >= 60:
-            ob.append("Z křídla umí doručit kvalitní **centry**.")
-    elif roleU == "RB":
-        if max(_pct(PP) or 0, _pct(CR) or 0, _pct(PR) or 0) >= 65:
-            ob.append("Ofenzivně laděný **fullback/wing-back** s progresí míče a centry.")
-        if max(_pct(DDp) or 0, _pct(INT) or 0) >= 65:
-            ob.append("Bez míče spolehlivý v **defenzivních principech** a čtení hry.")
-    elif roleU == "CM":
-        if max(_pct(PP) or 0, _pct(KP) or 0, _pct(SP) or 0) >= 70:
-            ob.append("**Playmaker** s progresivní přihrávkou a rozhodováním v meziprostoru.")
-        if max(_pct(DDp) or 0, _pct(INT) or 0) >= 65:
-            ob.append("Zvládá **defenzivní práci** (zisky, přerušení).")
-        if max(_pct(DR) or 0, _pct(PR) or 0) >= 65:
-            ob.append("Box-to-box charakter se schopností nést míč.")
-    elif roleU == "CF":
-        if max(_pct(G) or 0, _pct(xG) or 0) >= 70:
-            ob.append("Primárně **finisher** – dobré zakončení a náběhy do boxu.")
-        if max(_pct(KP) or 0, _pct(SA) or 0) >= 65:
-            ob.append("Umí hrát **spojku** a připravovat střelecké pozice.")
-    elif roleU == "CB":
-        if max(_pct(DDp) or 0, _pct(INT) or 0) >= 70:
-            ob.append("Duelový/čtecí **stoper**; vyhrává souboje a zachycuje.")
-        if _pct(ADp) and _pct(ADp) >= 60:
-            ob.append("Užitelný ve **vzduchu** (standardky, obrana boxu).")
-        if max(_pct(PP) or 0, _pct(SP) or 0) >= 65:
-            ob.append("Schopen **rozehrát** přes linii (ball-playing tendence).")
-    s.append(" ".join(ob))
+    if any(_is_high(v) for v in [KP, SP, PP]):
+        ob.append(
+            f"Ve výstavbě je patrná schopnost **progresivní přihrávky** "
+            f"(PP {_lvl(PP)}; smart/SP {_lvl(SP)}; klíčové/KP {_lvl(KP)}), "
+            "což zjednodušeně znamená, že často a kvalitně posouvá míč do nebezpečných zón "
+            "a vytváří spoluhráčům lepší pozice k zakončení."
+        )
+    if _is_high(CR):
+        ob.append(f"Z křídla dokáže doručit **kvalitní centry** (úspěšnost {_lvl(CR)}), což pomáhá proti zavřeným blokům.")
+    if any(_is_high(v) for v in [G, xG]):
+        ob.append(
+            f"Směrem k brance představuje **gólovou hrozbu** (G {_lvl(G)}, xG {_lvl(xG)}); "
+            "nevytváří jen objem střel, ale také se dostává do šancí dobré kvality."
+        )
+    if any(_is_high(v) for v in [DR, DRp, PR]):
+        ob.append(
+            f"V individuálním řešení situací působí **sebevědomě** (dribling {_lvl(DR)} / úspěšnost {_lvl(DRp)}; "
+            f"progresivní nesení míče {_lvl(PR)}), "
+            "což je užitečné pro odemykání obranných bloků jeden na jednoho."
+        )
+    if ob:
+        p.append("S míčem: " + " ".join(ob))
 
-    # 4) Off-ball a běžecký profil
+    # 4) Off-ball & defenziva – jak pracuje bez míče
+    df = []
+    if any(_is_high(v) for v in [DDp, INT]):
+        df.append(
+            f"V obraně je silný v **souborech a zachycování** (úsp. obr. duelů {_lvl(DDp)}, intercepts {_lvl(INT)}), "
+            "což z něj dělá hráče, který dokáže zastavit akce ještě před rozvinutím."
+        )
+    if _is_high(ADp):
+        df.append(f"Ve **vzdušných soubojích** drží solidní úroveň ({_lvl(ADp)}), což pomáhá při standardkách i v obranném boxu.")
+    if _is_high(FOU, th=60):
+        df.append(
+            f"Současně ale vykazuje vyšší **faulovost** ({_lvl(FOU)}); "
+            "v prostředí evropských utkání může být potřebná práce na timingu a postavení těla."
+        )
+    if df:
+        p.append("Bez míče: " + " ".join(df))
+
+    # 5) Běžecký kontext – tempo, rychlost, intenzita
     rb = []
     if not pd.isna(run_idx):
-        if _pct(run_idx) >= 60:
-            rb.append("Běžecky nad ligovým průměrem; zvládne **vysoké tempo a pressing**.")
+        if _is_high(run_idx, th=60):
+            rb.append(
+                f"Běžecky působí **nadprůměrně** ({_lvl(run_idx)}), "
+                "což je dobrý signál pro náročnější presink a rychlé přechody."
+            )
         elif _pct(run_idx) <= 45:
-            rb.append("Běžecká zátěž je slabší; v prostředí **vysoké intenzity** může mít limity.")
-    if max(_pct(HIR) or 0, _pct(SPR) or 0, _pct(HSD) or 0) >= 65:
-        rb.append("Má **rychlostní i HI profil** (náběhy, presinkové výpady).")
-    if _pct(TOP) and _pct(TOP) >= 70:
-        rb.append("Disponuje **nadstandardní top-speed**.")
-    if max(_pct(ACC) or 0, _pct(DEC) or 0) >= 65:
-        rb.append("Dobrá **explozivita** (akcelerace/decelerace).")
-    s.append(" ".join(rb))
+            rb.append(
+                f"Běžecký index **{_lvl(run_idx)}** naznačuje, že v utkáních s dlouhodobě vysokým tempem "
+                "může výkon kolísat; vhodné je řízení vytížení a role."
+            )
+    if any(_is_high(v) for v in [HIR, SPR, HSD]):
+        rb.append(
+            f"Ukazatele **HI běhů a sprintů** (HIR {_lvl(HIR)}, sprinty {_lvl(SPR)}, HSD {_lvl(HSD)}) "
+            "podporují ochotu a schopnost opakovaně zrychlit a vytvářet tlak na obranu."
+        )
+    if _is_high(TOP, th=70):
+        rb.append(f"Maximální rychlost vychází **nad standardem** ({_lvl(TOP)}), což je cenné pro náběhy i obranné krytí prostoru.")
+    if any(_is_high(v) for v in [ACC, DEC]):
+        rb.append(f"Pozitivní je i **explozivita** (akcelerace {_lvl(ACC)}, decelerace {_lvl(DEC)}); pomáhá v náhlých změnách směru.")
+    if rb:
+        p.append("Běžecký profil: " + " ".join(rb))
 
-    # 5) Rizika, disciplinovanost, rozvoj
+    # 6) Rizika a rozvojové priority
     dev = []
-    if _pct(FOU) and _pct(FOU) >= 60:
-        dev.append("Pozn.: zvýšená **faulovost** – hlídat timing a postavení.")
-    if roleU in ("RW","LW","RB") and (_pct(CR) is not None and _pct(CR) <= 45):
-        dev.append("Zlepšit **kvalitu centrů** (technika, výběr momentu).")
-    if roleU in ("CM","RB","CB") and (_pct(PP) is not None and _pct(PP) <= 45):
-        dev.append("Rozvoj **progresivní přihrávky** (tělo před příjmem, orientace).")
-    if roleU in ("RW","LW","CF") and (_pct(DRp) is not None and _pct(DRp) <= 45):
-        dev.append("Zvýšit **úspěšnost 1v1** (první dotek, změna rytmu).")
-    if roleU in ("CB","CF") and (_pct(ADp) is not None and _pct(ADp) <= 45):
-        dev.append("Pracovat na **aeriálech** (timing, odraz, práce těla).")
-    s.append(" ".join(dev))
+    if role5 in ("RW","LW") and not _is_high(CR) and not pd.isna(CR):
+        dev.append("U křídel stojí za pozornost **kvalita centrů** – technika a výběr momentu mohou posunout finální výstup.")
+    if role5 in ("CM","RB","CB") and not _is_high(PP) and not pd.isna(PP):
+        dev.append("Pro posun na vyšší úroveň bude důležitý **rychlejší první dotek a orientace těla**, aby rostl objem progresivních přihrávek.")
+    if role5 in ("RW","LW","CF") and not _is_high(DRp) and not pd.isna(DRp):
+        dev.append("V **1v1** by pomohla lepší změna rytmu a práce tělem; zvýší se úspěšnost průniků.")
+    if role5 in ("CB","CF") and not _is_high(ADp) and not pd.isna(ADp):
+        dev.append("Ve **vzduchu** doporučujeme zaměřit se na timing odrazu a práci lokty v pravidlech.")
+    if dev:
+        p.append("Rozvoj: " + " ".join(dev))
 
-    # 6) Taktické fit & doporučení
+    # 7) Taktický fit – kde bude prospívat / kde ne
     fit = []
-    if roleU in ("RW","LW","RB") and (_pct(HIR) or 0) >= 60:
-        fit.append("Vhodný do týmů s **vysokým presinkem** a rychlými přechody.")
-    if roleU in ("CM","CB") and (_pct(PP) or 0) >= 60:
-        fit.append("Použitelný i v **pozicním držení** s výstavbou od zadu.")
-    if not fit:
-        fit.append("Využití kontextové – přizpůsobit roli match-planu a strukturu okolo.")
-    s.append(" ".join(fit))
+    unfit = []
+    roleU = (role5 or "").upper()
+    if roleU in ("RW","LW","RB") and _is_high(HIR):
+        fit.append("rychlý, vertikální herní plán s **vysokým presinkem** a přepínáním po zisku")
+    if roleU in ("CM","CB") and _is_high(PP):
+        fit.append("tým s **pozicní výstavbou**, kde se cení progres míčem a rozdělování hry")
+    if roleU == "CF" and ( _is_high(G) or _is_high(xG) ):
+        fit.append("sestavy, které dostávají míč do **boxu** a hledají finále v prostoru mezi stopery")
+    if not fit: 
+        fit.append("kontextové využití dle match-planu; profil je vyvážený a přizpůsobitelný")
 
-    return "\n\n".join([p for p in s if p.strip()])
+    if roleU in ("RW","LW") and (not _is_high(run_idx) and not _is_high(DRp)):
+        unfit.append("dlouhé pásmo **poslední třetiny 1v1** bez kvalitní podpory spoluhráčů")
+    if roleU == "CM" and (not _is_high(PP) and not _is_high(SP)):
+        unfit.append("ústřední role **hlavního distributora** v pomalé poziční hře")
+    if roleU == "CB" and (not _is_high(DDp) and not _is_high(ADp)):
+        unfit.append("systém se **spoustou izolovaných 1v1** v hlubokém bloku proti silným soupeřům")
+
+    p.append(
+        "Vhodné herní prostředí: " + "; ".join(fit) + ". " +
+        ("Hůře vhodné: " + "; ".join(unfit) + "." if unfit else "")
+    )
+
+    # 8) Závěr
+    p.append(
+        "Souhrnně řečeno: profil hráče je z dat čitelný a přenositelný. "
+        "Pokud nastavíme roli v souladu s jeho silnými stránkami a současně ošetříme slabší oblasti "
+        "(zejména ty výše zmíněné v rozvojových prioritách), dostaneme stabilní výkon i v zápasech s vyšší intenzitou. "
+        "Z hlediska rozhodnutí o posílení kádru je klíčové porovnat, zda očekávaná role v systému Slavie využije jeho přednosti naplno."
+    )
+
+    return "\n\n".join(p)
+
 
 def _explain_metric(label: str) -> str:
     base = label.replace(" (běh)", "")
