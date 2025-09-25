@@ -415,8 +415,8 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     p1.append(
         "Zakončení/produkce: " +
         phrase(FINISH_TXT, max(P.get('g90',np.nan), P.get('shots90',np.nan))) +
-        f" (góly/90: {safe_float(player_row.get('Goals per 90', np.nan)) or 0:.2f}; "
-        f"střely/90: {safe_float(player_row.get('Shots per 90', np.nan)) or 0:.2f})."
+        f" (góly/90: {(safe_float(player_row.get('Goals per 90', np.nan)) or 0):.2f}; "
+        f"střely/90: {(safe_float(player_row.get('Shots per 90', np.nan)) or 0):.2f})."
     )
     paragraphs.append("**Útočná fáze.** " + " ".join(p1))
 
@@ -424,7 +424,7 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     p2.append(
         "Kreativita: " +
         phrase(CREA_TXT, P['keyp90']) +
-        f" (key passes/90: {safe_float(player_row.get('Key passes per 90', np.nan)) or 0:.2f})."
+        f" (key passes/90: {(safe_float(player_row.get('Key passes per 90', np.nan)) or 0):.2f})."
     )
     p2.append(
         "Přítomnost v boxu: " +
@@ -434,7 +434,7 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
     p2.append(
         "Asistence: " +
         ("stabilní" if bucket(P['a90']) in ['nadprum','elite'] else "kolísavé") +
-        f" (asistence/90: {safe_float(player_row.get('Assists per 90', np.nan)) or 0:.2f})."
+        f" (asistence/90: {(safe_float(player_row.get('Assists per 90', np.nan)) or 0):.2f})."
     )
     paragraphs.append("**Kreativita a poslední třetina.** " + " ".join(p2))
 
@@ -594,3 +594,4 @@ if league_df is not None and player_df is not None and len(player_df) > 0:
         st.warning("DOCX export není dostupný – chybí python-docx. Přidej ho do requirements.txt a redeployni appku.")
 else:
     st.info("Nahraj ligový soubor a vyber/nahraj hráče – pak ti vygeneruju vizuály a stažitelný report.")
+
