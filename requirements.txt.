@@ -4,3 +4,4 @@ numpy
 matplotlib
 openpyxl
 xlrd
+python-docx==1.1.2
